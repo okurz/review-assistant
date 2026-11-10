@@ -1,6 +1,6 @@
 # Copyright SUSE LLC
 # SPDX-License-Identifier: MIT
-"""Tests for the Hermes review runner, with a fake runner in place of Hermes and review-lint."""
+"""Tests for the review runner, with a fake runner in place of git, Hermes and review-lint."""
 
 import subprocess  # noqa: S404 - builds CompletedProcess fixtures only
 from collections.abc import Sequence
@@ -10,16 +10,18 @@ import pytest
 from pytest_mock import MockerFixture
 
 from review_assistant.config import load_config
-from review_assistant.review import PullRequest, ReviewError, review_pull_request, run_command
+from review_assistant.review import PullRequest, ReviewError, Workspace, review_pull_request, run_command
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
 CONFIG = load_config(EXAMPLE)
 SKILL_ROOT = Path("/cache/skill/skills/openqa")
+CLONE = Path("/cache/openQA")
 NUMBER = 8079
+HEAD = "a6d255abcbce67a380f6716c94e861869ed64882"
 PR = PullRequest(
     repo="os-autoinst/openQA",
     number=NUMBER,
-    head_sha="a6d255abcbce",
+    head_sha=HEAD,
     title="Fix retry handling",
     body="Retries were unbounded.",
     diff="diff --git a/lib/x.pm b/lib/x.pm\n",
@@ -28,11 +30,22 @@ PR = PullRequest(
 
 
 class _FakeRunner:
-    def __init__(self, *, hermes_rc: int = 0, lint_rc: int = 0, lint_out: str = "", write_review: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        hermes_rc: int = 0,
+        lint_rc: int = 0,
+        lint_out: str = "",
+        write_review: bool = True,
+        head: str = HEAD,
+        git_rc: int = 0,
+    ) -> None:
         self.hermes_rc = hermes_rc
         self.lint_rc = lint_rc
         self.lint_out = lint_out
         self.write_review = write_review
+        self.head = head
+        self.git_rc = git_rc
         self.calls: list[list[str]] = []
 
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -41,26 +54,71 @@ class _FakeRunner:
             if self.write_review and self.hermes_rc == 0:
                 (Path(argv[argv.index("--in") + 1]) / f"review-{NUMBER}.json").write_text("{}", encoding="utf-8")
             return subprocess.CompletedProcess(argv, self.hermes_rc, stdout="", stderr="hermes failed")
-        return subprocess.CompletedProcess(argv, self.lint_rc, stdout=self.lint_out, stderr="")
+        if argv[0] == "python3":
+            return subprocess.CompletedProcess(argv, self.lint_rc, stdout=self.lint_out, stderr="")
+        if "rev-parse" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{self.head}\n", stderr="")
+        return subprocess.CompletedProcess(argv, self.git_rc, stdout="", stderr="git failed")
 
     def hermes_argv(self) -> list[str]:
         return next(call for call in self.calls if call[0] == "hermes")
 
 
-def test_hermes_is_invoked_with_provider_model_scratch_and_toolsets(tmp_path: Path) -> None:
+def _review(tmp_path: Path, runner: _FakeRunner) -> Path:
+    return review_pull_request(CONFIG, PR, Workspace(SKILL_ROOT, tmp_path, CLONE), runner)
+
+
+def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path) -> None:
     runner = _FakeRunner()
-    review_pull_request(CONFIG, PR, SKILL_ROOT, tmp_path, runner)
+    _review(tmp_path, runner)
+    worktree = tmp_path / f"pr-{NUMBER}" / "worktree"
+    assert runner.calls[0] == [
+        "git",
+        "-C",
+        str(CLONE),
+        "fetch",
+        "--quiet",
+        "origin",
+        f"+refs/pull/{NUMBER}/head:refs/review-assistant/pr-{NUMBER}",
+    ]
+    assert runner.calls[1] == [
+        "git",
+        "-C",
+        str(CLONE),
+        "worktree",
+        "add",
+        "--detach",
+        str(worktree),
+        f"refs/review-assistant/pr-{NUMBER}",
+    ]
+
+
+def test_moved_pr_head_is_rejected_before_review(tmp_path: Path) -> None:
+    with pytest.raises(ReviewError, match="moved: checked out"):
+        _review(tmp_path, _FakeRunner(head="b" * 40))
+
+
+def test_git_failure_is_rejected_before_review(tmp_path: Path) -> None:
+    runner = _FakeRunner(git_rc=128)
+    with pytest.raises(ReviewError, match="git fetch exited 128"):
+        _review(tmp_path, runner)
+    assert all(call[0] != "hermes" for call in runner.calls)
+
+
+def test_hermes_gets_only_provider_model_scratch_and_toolsets(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+    _review(tmp_path, runner)
     argv = runner.hermes_argv()
     assert argv[0:2] == ["hermes", "-z"]
     assert argv[3:] == [
         "--provider",
         "google-vertex",
         "-m",
-        "gemini-3.8-flash",
+        "google/gemini-3.8-flash",
         "--in",
         str(tmp_path / f"pr-{NUMBER}"),
         "-t",
-        "file,terminal",
+        "file",
     ]
 
 
@@ -70,26 +128,33 @@ def test_hermes_is_invoked_with_provider_model_scratch_and_toolsets(tmp_path: Pa
         pytest.param("openqa-pr-review", id="playbook-named"),
         pytest.param(str(SKILL_ROOT), id="skill-root-given"),
         pytest.param(f"review-{NUMBER}.json", id="review-path-given"),
-        pytest.param("--lines 42", id="changed-lines-given"),
         pytest.param("Post nothing", id="no-posting-instruction"),
     ],
 )
 def test_prompt_names_playbook_and_paths(tmp_path: Path, expected: str) -> None:
     runner = _FakeRunner()
-    review_pull_request(CONFIG, PR, SKILL_ROOT, tmp_path, runner)
+    _review(tmp_path, runner)
     assert expected in runner.hermes_argv()[2]
 
 
+def test_prompt_does_not_ask_the_agent_to_run_commands(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+    _review(tmp_path, runner)
+    prompt = runner.hermes_argv()[2]
+    assert "review-lint" not in prompt
+    assert "run " not in prompt
+
+
 def test_scratch_holds_diff_and_pr_text(tmp_path: Path) -> None:
-    review_pull_request(CONFIG, PR, SKILL_ROOT, tmp_path, _FakeRunner())
+    _review(tmp_path, _FakeRunner())
     scratch = tmp_path / f"pr-{NUMBER}"
     assert (scratch / "diff.patch").read_text(encoding="utf-8") == PR.diff
     assert (scratch / "pr.md").read_text(encoding="utf-8") == "# Fix retry handling\n\nRetries were unbounded.\n"
 
 
-def test_passing_review_is_linted_with_changed_lines_and_returned(tmp_path: Path) -> None:
+def test_passing_review_is_linted_in_python_with_changed_lines(tmp_path: Path) -> None:
     runner = _FakeRunner()
-    review = review_pull_request(CONFIG, PR, SKILL_ROOT, tmp_path, runner)
+    review = _review(tmp_path, runner)
     assert review == tmp_path / f"pr-{NUMBER}" / f"review-{NUMBER}.json"
     assert runner.calls[-1] == [
         "python3",
@@ -115,7 +180,7 @@ def test_passing_review_is_linted_with_changed_lines_and_returned(tmp_path: Path
 )
 def test_failed_review_is_rejected(tmp_path: Path, runner: _FakeRunner, message: str) -> None:
     with pytest.raises(ReviewError, match=message):
-        review_pull_request(CONFIG, PR, SKILL_ROOT, tmp_path, runner)
+        _review(tmp_path, runner)
 
 
 def test_stale_review_from_earlier_run_is_not_accepted(tmp_path: Path) -> None:
@@ -123,7 +188,7 @@ def test_stale_review_from_earlier_run_is_not_accepted(tmp_path: Path) -> None:
     scratch.mkdir()
     (scratch / f"review-{NUMBER}.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ReviewError, match="hermes wrote no review"):
-        review_pull_request(CONFIG, PR, SKILL_ROOT, tmp_path, _FakeRunner(write_review=False))
+        _review(tmp_path, _FakeRunner(write_review=False))
 
 
 def test_run_command_executes_argv_without_shell(mocker: MockerFixture) -> None:

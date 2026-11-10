@@ -15,18 +15,20 @@ from pathlib import Path
 import pydantic
 import requests
 
-from review_assistant.config import ReviewerConfig, load_config
+from review_assistant.config import ConfigError, ReviewerConfig, load_config
 from review_assistant.github import (
     GitHubError,
     PullSummary,
+    ReviewDraft,
     fetch_pull_request,
     list_open_pulls,
     post_review,
     read_token_file,
     take_write_token,
 )
-from review_assistant.review import ReviewError, review_pull_request
-from review_assistant.skill import checkout_skill
+from review_assistant.hardening import HardeningError, make_non_dumpable
+from review_assistant.review import ReviewError, Workspace, review_pull_request
+from review_assistant.skill import SkillCheckoutError, checkout_skill
 from review_assistant.state import ReviewRecord, State, is_reviewed, load_state, save_state, state_key
 
 REPO = "os-autoinst/openQA"
@@ -48,6 +50,7 @@ class _Session:
     read_token: str
     post_token: str | None
     skill_root: Path
+    clone: Path
     scratch_root: Path
     state_file: Path
     state: State
@@ -63,13 +66,16 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--read-token-file", type=Path, required=True, help="file holding the read-only GitHub token")
     run.add_argument("--state-file", type=Path, default=DEFAULT_STATE, help="local record of posted reviews")
     run.add_argument("--skill-cache", type=Path, default=DEFAULT_SKILL_CACHE, help="directory for the pinned skill")
+    run.add_argument("--clone", type=Path, required=True, help="openQA clone whose fetches give the PR heads")
     return parser
 
 
 def _review_one(session: _Session, summary: PullSummary) -> None:
     pull = fetch_pull_request(session.read_token, REPO, summary.number)
-    review_path = review_pull_request(session.config, pull, session.skill_root, session.scratch_root)
+    workspace = Workspace(session.skill_root, session.scratch_root, session.clone)
+    review_path = review_pull_request(session.config, pull, workspace)
     review = json.loads(review_path.read_text(encoding="utf-8"))
+    ReviewDraft.model_validate(review)
     if review.get("commit_id") != pull.head_sha:
         msg = f"review commit_id {review.get('commit_id')} is not the checked head {pull.head_sha}"
         raise ReviewError(msg)
@@ -115,6 +121,7 @@ def _run(args: argparse.Namespace) -> int:
             read_token=read_token,
             post_token=post_token,
             skill_root=skill_root,
+            clone=args.clone,
             scratch_root=Path(scratch_root),
             state_file=args.state_file,
             state=load_state(args.state_file),
@@ -127,7 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
+        make_non_dumpable()
         return _run(args)
-    except GitHubError as error:
+    except (GitHubError, HardeningError, ConfigError, SkillCheckoutError, ReviewError) as error:
         sys.stderr.write(f"error: {error}\n")
         return EXIT_USAGE

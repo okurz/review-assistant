@@ -1,8 +1,8 @@
 # Copyright SUSE LLC
 # SPDX-License-Identifier: MIT
-"""Runs the Hermes review agent over one pull request and lints the review it drafts."""
+"""Checks out a pull request, runs the Hermes review agent over it, and lints the review it drafts."""
 
-import subprocess  # noqa: S404 - hermes and python3 are external interfaces, argv only, no shell
+import subprocess  # noqa: S404 - git, hermes and python3 are external interfaces, argv only, no shell
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +33,15 @@ class PullRequest:
 
 
 @dataclass(frozen=True)
+class Workspace:
+    """Where a review runs: the pinned skill, the scratch root, and the openQA clone."""
+
+    skill_root: Path
+    scratch_root: Path
+    clone: Path
+
+
+@dataclass(frozen=True)
 class Scratch:
     """Per-PR scratch directory holding the inputs and the drafted review."""
 
@@ -44,6 +53,13 @@ class Scratch:
 def run_command(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     """Run argv without a shell and return its completed process."""
     return subprocess.run(argv, check=False, capture_output=True, text=True)  # noqa: S603 - argv only, no shell
+
+
+def _check(result: subprocess.CompletedProcess[str], step: str) -> None:
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        msg = f"{step} exited {result.returncode}: {detail}"
+        raise ReviewError(msg)
 
 
 def _prepare_scratch(root: Path, pr: PullRequest) -> Scratch:
@@ -60,13 +76,29 @@ def _prepare_scratch(root: Path, pr: PullRequest) -> Scratch:
     return scratch
 
 
+def checkout_pr(clone: Path, pr: PullRequest, scratch: Scratch, runner: CommandRunner) -> None:
+    """Create a detached read-only worktree of the PR head, failing unless it is exactly head_sha."""
+    refname = f"refs/review-assistant/pr-{pr.number}"
+    _check(
+        runner(["git", "-C", str(clone), "fetch", "--quiet", "origin", f"+refs/pull/{pr.number}/head:{refname}"]),
+        "git fetch",
+    )
+    _check(
+        runner(["git", "-C", str(clone), "worktree", "add", "--detach", str(scratch.worktree), refname]), "git worktree"
+    )
+    head = runner(["git", "-C", str(scratch.worktree), "rev-parse", "HEAD"])
+    _check(head, "git rev-parse")
+    if head.stdout.strip() != pr.head_sha:
+        msg = f"PR #{pr.number} moved: checked out {head.stdout.strip()}, expected {pr.head_sha}"
+        raise ReviewError(msg)
+
+
 def _prompt(pr: PullRequest, skill_root: Path, scratch: Scratch) -> str:
     return (
         f"Review {pr.repo} pull request #{pr.number} with the {PLAYBOOK} playbook of the openQA skill "
         f"at {skill_root}. Inputs: diff {scratch.directory / 'diff.patch'}, PR text {scratch.directory / 'pr.md'}, "
-        f"read-only PR-head worktree path {scratch.worktree}. Write the review JSON to {scratch.review} "
-        f"and lint it with python3 {skill_root / LINT_SCRIPT} {scratch.review} --lines {pr.changed_lines} "
-        "until it exits 0. Post nothing: no review, comment, approval or label."
+        f"read-only PR-head checkout {scratch.worktree}. Write the review JSON to {scratch.review}. "
+        "Post nothing: no review, comment, approval or label."
     )
 
 
@@ -86,26 +118,22 @@ def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path) -> list[s
     ]
 
 
-def _check(result: subprocess.CompletedProcess[str], step: str) -> None:
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        msg = f"{step} exited {result.returncode}: {detail}"
-        raise ReviewError(msg)
-
-
 def review_pull_request(
-    config: ReviewerConfig,
-    pr: PullRequest,
-    skill_root: Path,
-    scratch_root: Path,
-    runner: CommandRunner = run_command,
+    config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runner: CommandRunner = run_command
 ) -> Path:
-    """Draft the review of pr with Hermes, lint it, and return the path of the passing review JSON."""
-    scratch = _prepare_scratch(scratch_root, pr)
-    _check(runner(_hermes_argv(config, _prompt(pr, skill_root, scratch), scratch.directory)), "hermes")
+    """Check out pr, have Hermes draft its review, lint it in Python, and return the passing review JSON."""
+    scratch = _prepare_scratch(workspace.scratch_root, pr)
+    checkout_pr(workspace.clone, pr, scratch, runner)
+    _check(runner(_hermes_argv(config, _prompt(pr, workspace.skill_root, scratch), scratch.directory)), "hermes")
     if not scratch.review.is_file():
         msg = f"hermes wrote no review at {scratch.review}"
         raise ReviewError(msg)
-    lint_argv = ["python3", str(skill_root / LINT_SCRIPT), str(scratch.review), "--lines", str(pr.changed_lines)]
+    lint_argv = [
+        "python3",
+        str(workspace.skill_root / LINT_SCRIPT),
+        str(scratch.review),
+        "--lines",
+        str(pr.changed_lines),
+    ]
     _check(runner(lint_argv), "review-lint")
     return scratch.review

@@ -1,6 +1,6 @@
 # Copyright SUSE LLC
 # SPDX-License-Identifier: MIT
-"""GitHub access with two credentials: a read-only token for listing and diffs, the write token for COMMENT reviews."""
+"""GitHub access with two credentials: a read-only token for listing and diffs, the write token for reviews."""
 
 from collections.abc import Iterator, Mapping, MutableMapping
 from pathlib import Path
@@ -43,12 +43,12 @@ class InlineComment(BaseModel):
 
 
 class ReviewDraft(BaseModel):
-    """Review JSON for POST /pulls/N/reviews; only COMMENT is accepted."""
+    """Review JSON for POST /pulls/N/reviews; only COMMENT and APPROVE are accepted."""
 
     model_config = ConfigDict(frozen=True)
 
     commit_id: str
-    event: Literal["COMMENT"]
+    event: Literal["COMMENT", "APPROVE"]
     body: str = ""
     comments: list[InlineComment] = Field(default_factory=list)
 
@@ -128,7 +128,7 @@ def fetch_pull_request(token: str, repo: str, number: int) -> PullRequest:
 
 
 def post_review(token: str, repo: str, number: int, review: Mapping[str, Any]) -> int:
-    """Post a COMMENT review and return its id; any other event fails validation before a request."""
+    """Post a COMMENT or APPROVE review and return its id; any other event fails validation before a request."""
     draft = ReviewDraft.model_validate(review)
     response = _session(token).post(
         f"{API}/repos/{repo}/pulls/{number}/reviews",

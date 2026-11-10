@@ -15,7 +15,8 @@ from pytest_mock import MockerFixture
 from review_assistant.cli import EXIT_FAILED, EXIT_OK, EXIT_USAGE, main
 from review_assistant.config import ReviewerConfig
 from review_assistant.github import PullSummary, ReviewDraft
-from review_assistant.review import PullRequest, ReviewError
+from review_assistant.hardening import HardeningError
+from review_assistant.review import PullRequest, ReviewError, Workspace
 from review_assistant.state import ReviewRecord, load_state, save_state, state_key
 
 REPO = "os-autoinst/openQA"
@@ -39,6 +40,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
         token_file=token_file,
         state_file=tmp_path / "state.json",
         skill_cache=tmp_path / "skills",
+        clone=tmp_path / "openQA",
         review_errors={},
         review_overrides={},
         post_errors={},
@@ -55,10 +57,10 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
             changed_lines=3,
         )
 
-    def draft(_config: ReviewerConfig, pull: PullRequest, _skill_root: Path, scratch_root: Path) -> Path:
+    def draft(_config: ReviewerConfig, pull: PullRequest, workspace: Workspace) -> Path:
         if pull.number in ns.review_errors:
             raise ns.review_errors[pull.number]
-        directory = scratch_root / f"pr-{pull.number}"
+        directory = workspace.scratch_root / f"pr-{pull.number}"
         directory.mkdir(parents=True, exist_ok=True)
         review = {
             "commit_id": pull.head_sha,
@@ -77,6 +79,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
         ReviewDraft.model_validate(review)
         return 5000 + number
 
+    mocker.patch("review_assistant.cli.make_non_dumpable")
     mocker.patch("review_assistant.cli.checkout_skill", return_value=tmp_path / "checkout")
     ns.listing = mocker.patch("review_assistant.cli.list_open_pulls", return_value=PULLS)
     ns.fetch = mocker.patch("review_assistant.cli.fetch_pull_request", side_effect=fetch)
@@ -96,6 +99,8 @@ def _argv(ns: SimpleNamespace, *extra: str) -> list[str]:
         str(ns.state_file),
         "--skill-cache",
         str(ns.skill_cache),
+        "--clone",
+        str(ns.clone),
         *extra,
     ]
 
@@ -156,7 +161,9 @@ def test_limit_caps_new_reviews_after_skips(fakes: SimpleNamespace) -> None:
     [
         pytest.param(lambda ns: ns.review_errors.update({1: ReviewError("lint failed")}), id="review-raises"),
         pytest.param(lambda ns: ns.review_overrides.update({1: {"commit_id": "0" * 40}}), id="commit-id-mismatch"),
-        pytest.param(lambda ns: ns.review_overrides.update({1: {"event": "APPROVE"}}), id="approve-event"),
+        pytest.param(
+            lambda ns: ns.review_overrides.update({1: {"event": "REQUEST_CHANGES"}}), id="request-changes-event"
+        ),
         pytest.param(lambda ns: ns.post_errors.update({1: requests.HTTPError("403")}), id="post-http-error"),
     ],
 )
@@ -171,3 +178,19 @@ def test_failed_pull_is_logged_and_not_recorded_while_run_continues(
     assert main(_argv(fakes, "--post")) == EXIT_FAILED
     assert set(load_state(fakes.state_file)) == {state_key(REPO, 2), state_key(REPO, 3)}
     assert f"{REPO}#1 not recorded" in caplog.text
+
+
+def test_failed_hardening_stops_before_any_listing(fakes: SimpleNamespace, mocker: MockerFixture) -> None:
+    mocker.patch("review_assistant.cli.make_non_dumpable", side_effect=HardeningError("prctl refused"))
+    assert main(_argv(fakes)) == EXIT_USAGE
+    fakes.listing.assert_not_called()
+
+
+def test_clone_path_is_required(
+    fakes: SimpleNamespace, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mocker.patch("review_assistant.cli.make_non_dumpable")
+    argv = [arg for arg in _argv(fakes) if arg != "--clone" and arg != str(fakes.clone)]
+    with pytest.raises(SystemExit):
+        main(argv)
+    assert "--clone" in capsys.readouterr().err

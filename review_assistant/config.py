@@ -4,7 +4,6 @@
 
 import re
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,7 +34,6 @@ class ReviewerConfig(BaseModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     toolsets: str = Field(min_length=1)
-    comment_only: Literal[True]
     pilot_cap: int = Field(default=10, ge=1)
 
 

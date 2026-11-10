@@ -16,16 +16,14 @@ VALID = {
     "agent_name": "os-autoinst-review",
     "skill": SKILL,
     "provider": "google-vertex",
-    "model": "gemini-3.8-flash",
-    "toolsets": "file,terminal",
-    "comment_only": True,
+    "model": "google/gemini-3.8-flash",
+    "toolsets": "file",
 }
 
 
 @pytest.mark.parametrize(
     "override",
     [
-        pytest.param({"comment_only": False}, id="comment-only-disabled"),
         pytest.param({"pilot_cap": 0}, id="pilot-cap-zero"),
         pytest.param({"skill": {"repo": "x", "sha": "main"}}, id="skill-sha-not-hex"),
         pytest.param({"approve": True}, id="unknown-top-level-key"),
@@ -62,11 +60,10 @@ def test_token_like_value_nested_in_list_is_rejected() -> None:
 
 def test_example_config_loads_with_pilot_settings() -> None:
     config = load_config(EXAMPLE)
-    assert (config.provider, config.model, config.toolsets, config.comment_only, config.pilot_cap) == (
+    assert (config.provider, config.model, config.toolsets, config.pilot_cap) == (
         "google-vertex",
-        "gemini-3.8-flash",
-        "file,terminal",
-        True,
+        "google/gemini-3.8-flash",
+        "file",
         10,
     )
 

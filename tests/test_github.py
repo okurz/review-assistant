@@ -137,16 +137,26 @@ def test_comment_review_is_posted_with_write_token() -> None:
     assert json.loads(request.body) == REVIEW
 
 
+def test_approve_review_is_posted_with_write_token() -> None:
+    url = f"{PULLS}/8079/reviews"
+    with responses.RequestsMock() as rsps:
+        rsps.post(url, json={"id": 5841967132})
+        review_id = post_review(WRITE_TOKEN, REPO, 8079, {**REVIEW, "event": "APPROVE"})
+        request = rsps.calls[0].request
+    assert review_id == 5841967132
+    assert isinstance(request.body, bytes)
+    assert json.loads(request.body)["event"] == "APPROVE"
+
+
 @pytest.mark.parametrize(
     "event",
     [
-        pytest.param("APPROVE", id="approve"),
         pytest.param("REQUEST_CHANGES", id="request-changes"),
         pytest.param("DISMISS", id="dismiss"),
         pytest.param(None, id="missing"),
     ],
 )
-def test_non_comment_review_is_rejected_before_any_request(event: str | None) -> None:
+def test_review_event_outside_comment_and_approve_is_rejected_before_any_request(event: str | None) -> None:
     review = {**REVIEW, "event": event} if event else {k: v for k, v in REVIEW.items() if k != "event"}
     with responses.RequestsMock() as rsps:
         with pytest.raises(pydantic.ValidationError):
