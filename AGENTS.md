@@ -53,8 +53,8 @@ requests, PyYAML, pydantic, ruff, ty, pytest.
 
 ## Architecture invariants
 
-- The GitHub client posts reviews with `event: COMMENT` only. Any other event is rejected in code
-  and must stay rejected; approvals must not come from this tool during the pilot.
+- The GitHub client posts reviews with `event: COMMENT` or `event: APPROVE` only (approved 2026-11-10,
+  D1). `REQUEST_CHANGES`, `DISMISS` and any other event are rejected in code and must stay rejected.
 - The write token is read only from `REVIEW_ASSISTANT_GH_TOKEN` and the read-only token only from
   `REVIEW_ASSISTANT_GH_READ_TOKEN`. Neither may be read from or written to a configuration file.
 - Posting to GitHub happens only with `--post`. Dry-run is the default.
