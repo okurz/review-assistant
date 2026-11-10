@@ -1,6 +1,6 @@
 # OpenPlatform Rancher Prime deployment
 
-Operator runbook for the review-assistant workload in the SUSE OpenPlatform Rancher Prime cluster (the OpenPlatform Rancher Prime dashboard). Manifests live in `deploy/kubernetes/`. Tracker: https://progress.opensuse.org/issues/210027
+Operator runbook for the review-assistant workload in the SUSE OpenPlatform Rancher Prime cluster. Manifests live in `deploy/kubernetes/`. Tracker: https://progress.opensuse.org/issues/210027
 
 The workload is a single-replica `Deployment` running `review-assistant daemon`, which polls open `os-autoinst/openQA` pull requests every 60 seconds and reviews them one at a time.
 
@@ -13,6 +13,13 @@ Run commands from the repository root with a kubeconfig for the target cluster. 
 3. Confirm the context: `kubectl config current-context` and `kubectl get ns review-assistant`.
 
 In the Rancher UI, the workload is under the Cluster Explorer, namespace `review-assistant`, in the Workload menu (Deployments, Pods, Jobs) and the Storage menu (PersistentVolumeClaims). Menu names depend on the Rancher version.
+
+## Placeholders
+
+The repository does not contain the GCP project ID or the cluster host. Before deploying, replace `REPLACE_WITH_GCP_PROJECT_ID`:
+
+- In the cluster: `kubectl -n review-assistant edit configmap review-assistant-config`, the `hermes-config.yaml` key. Restart the Deployment afterwards.
+- For local runs: `deploy/hermes/config.yaml`. Do not commit the edited value.
 
 ## Provision secrets
 
