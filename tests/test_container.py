@@ -19,7 +19,7 @@ def _paths(tmp_path: Path) -> HostPaths:
         read_token_file=tmp_path / "read-token",
         env_file=tmp_path / "write.env",
         config_file=tmp_path / "reviewer.yaml",
-        hermes_config_dir=tmp_path / "hermes",
+        hermes_config_file=tmp_path / "config.yaml",
         state_file=tmp_path / "state.json",
         skill_cache=tmp_path / "skills",
     )
@@ -37,6 +37,7 @@ def _mounts(argv: list[str]) -> dict[str, str]:
         pytest.param("--userns=keep-id", id="host-user-owns-mounts"),
         pytest.param("--read-only", id="read-only-root"),
         pytest.param("--tmpfs=/tmp", id="writable-tmp"),
+        pytest.param("--tmpfs=/hermes:mode=1777", id="writable-hermes-home"),
         pytest.param("--cap-drop=ALL", id="no-capabilities"),
         pytest.param("--security-opt=no-new-privileges", id="no-privilege-escalation"),
     ],
@@ -48,16 +49,23 @@ def test_run_is_hardened(tmp_path: Path, flag: str) -> None:
 @pytest.mark.parametrize(
     ("container_path", "mode"),
     [
-        pytest.param("/run/secrets/adc.json", "ro", id="adc-read-only"),
+        pytest.param("/run/secrets/gcloud/application_default_credentials.json", "ro", id="adc-read-only"),
         pytest.param("/run/secrets/gh-read-token", "ro", id="read-token-read-only"),
         pytest.param("/config/reviewer.yaml", "ro", id="config-read-only"),
-        pytest.param("/opt/hermes-config", "ro", id="hermes-config-read-only"),
+        pytest.param("/hermes/config.yaml", "ro", id="hermes-config-read-only"),
         pytest.param("/state/state.json", "rw", id="state-writable"),
         pytest.param("/cache/skills", "rw", id="skill-cache-writable"),
     ],
 )
 def test_mount_modes(tmp_path: Path, container_path: str, mode: str) -> None:
     assert _mounts(build_run_argv(_paths(tmp_path), []))[container_path] == mode
+
+
+def test_adc_is_found_through_gcloud_config_not_as_service_account_key(tmp_path: Path) -> None:
+    argv = build_run_argv(_paths(tmp_path), [])
+    envs = [argv[index + 1] for index, arg in enumerate(argv) if arg == "-e"]
+    assert "CLOUDSDK_CONFIG=/run/secrets/gcloud" in envs
+    assert not any(env.startswith("GOOGLE_APPLICATION_CREDENTIALS=") for env in envs)
 
 
 def test_write_token_is_passed_only_as_env_file_path(tmp_path: Path) -> None:

@@ -13,7 +13,10 @@ CONTAINER_CONFIG = "/config/reviewer.yaml"
 CONTAINER_STATE = "/state/state.json"
 CONTAINER_SKILL_CACHE = "/cache/skills"
 CONTAINER_GH_READ_PATH = "/run/secrets/gh-read-token"
-CONTAINER_ADC = "/run/secrets/adc.json"
+CONTAINER_GCLOUD_DIR = "/run/secrets/gcloud"
+CONTAINER_ADC = f"{CONTAINER_GCLOUD_DIR}/application_default_credentials.json"
+CONTAINER_HERMES_HOME = "/hermes"
+CONTAINER_HERMES_CONFIG = f"{CONTAINER_HERMES_HOME}/config.yaml"
 
 
 @dataclass(frozen=True)
@@ -24,7 +27,7 @@ class HostPaths:
     read_token_file: Path
     env_file: Path
     config_file: Path
-    hermes_config_dir: Path
+    hermes_config_file: Path
     state_file: Path
     skill_cache: Path
     image: str = IMAGE
@@ -39,6 +42,7 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "--userns=keep-id",
         "--read-only",
         "--tmpfs=/tmp",
+        f"--tmpfs={CONTAINER_HERMES_HOME}:mode=1777",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
         "--env-file",
@@ -46,9 +50,9 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "-e",
         "HOME=/tmp",
         "-e",
-        "HERMES_HOME=/tmp/hermes",
+        f"HERMES_HOME={CONTAINER_HERMES_HOME}",
         "-e",
-        f"GOOGLE_APPLICATION_CREDENTIALS={CONTAINER_ADC}",
+        f"CLOUDSDK_CONFIG={CONTAINER_GCLOUD_DIR}",
         "-v",
         f"{paths.adc_file}:{CONTAINER_ADC}:ro",
         "-v",
@@ -56,7 +60,7 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "-v",
         f"{paths.config_file}:{CONTAINER_CONFIG}:ro",
         "-v",
-        f"{paths.hermes_config_dir}:/opt/hermes-config:ro",
+        f"{paths.hermes_config_file}:{CONTAINER_HERMES_CONFIG}:ro",
         "-v",
         f"{paths.state_file}:{CONTAINER_STATE}:rw",
         "-v",
@@ -84,7 +88,7 @@ def default_host_paths(repo: Path) -> HostPaths:
         read_token_file=config_home / "read-token",
         env_file=config_home / "write.env",
         config_file=repo / "config" / "reviewer.yaml",
-        hermes_config_dir=repo / "deploy" / "hermes",
+        hermes_config_file=repo / "deploy" / "hermes" / "config.yaml",
         state_file=home / ".local" / "state" / "review-assistant" / "state.json",
         skill_cache=home / ".cache" / "review-assistant" / "skills",
     )
