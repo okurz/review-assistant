@@ -15,7 +15,9 @@ SKILL = {"repo": "https://github.com/os-autoinst/openQA-skill.git", "sha": "a6d2
 VALID = {
     "agent_name": "os-autoinst-review",
     "skill": SKILL,
-    "model": "google-vertex/claude-haiku-5-5@default",
+    "provider": "google-vertex",
+    "model": "gemini-3.8-flash",
+    "toolsets": "file,terminal",
     "comment_only": True,
 }
 
@@ -30,6 +32,9 @@ VALID = {
         pytest.param({"token_env": "OTHER"}, id="token-env-not-configurable"),
         pytest.param({"skill": {**SKILL, "ref": "main"}}, id="unknown-skill-key"),
         pytest.param({"agent_name": None}, id="agent-name-null"),
+        pytest.param({"model": ""}, id="model-empty"),
+        pytest.param({"toolsets": ""}, id="toolsets-empty"),
+        pytest.param({"provider": None}, id="provider-null"),
     ],
 )
 def test_invalid_config_is_rejected(override: dict) -> None:
@@ -57,8 +62,10 @@ def test_token_like_value_nested_in_list_is_rejected() -> None:
 
 def test_example_config_loads_with_pilot_settings() -> None:
     config = load_config(EXAMPLE)
-    assert (config.model, config.comment_only, config.pilot_cap) == (
-        "google-vertex/claude-haiku-5-5@default",
+    assert (config.provider, config.model, config.toolsets, config.comment_only, config.pilot_cap) == (
+        "google-vertex",
+        "gemini-3.8-flash",
+        "file,terminal",
         True,
         10,
     )

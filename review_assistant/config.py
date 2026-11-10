@@ -32,7 +32,9 @@ class ReviewerConfig(BaseModel):
 
     agent_name: str
     skill: SkillConfig
-    model: str
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    toolsets: str = Field(min_length=1)
     comment_only: Literal[True]
     pilot_cap: int = Field(default=10, ge=1)
 
