@@ -25,6 +25,7 @@ class PullRequest:
 
     repo: str
     number: int
+    head_sha: str
     title: str
     body: str
     diff: str

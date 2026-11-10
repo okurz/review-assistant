@@ -19,6 +19,7 @@ NUMBER = 8079
 PR = PullRequest(
     repo="os-autoinst/openQA",
     number=NUMBER,
+    head_sha="a6d255abcbce",
     title="Fix retry handling",
     body="Retries were unbounded.",
     diff="diff --git a/lib/x.pm b/lib/x.pm\n",
