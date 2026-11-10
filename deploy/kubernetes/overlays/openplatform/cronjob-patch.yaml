@@ -1,0 +1,18 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: review-assistant
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: review-assistant
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 1Gi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi

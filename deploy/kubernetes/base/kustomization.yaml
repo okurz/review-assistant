@@ -7,3 +7,4 @@ resources:
   - configmap.yaml
   - pvc.yaml
   - networkpolicy.yaml
+  - cronjob.yaml
