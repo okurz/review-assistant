@@ -6,22 +6,25 @@ import argparse
 import json
 import logging
 import os
+import signal
 import sys
 import tempfile
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
-import pydantic
-import requests
+from types import FrameType
 
 from review_assistant.config import ConfigError, ReviewerConfig, load_config
+from review_assistant.daemon import PER_PULL_ERRORS, Daemon
 from review_assistant.github import (
     GitHubError,
     PullSummary,
     ReviewDraft,
     fetch_pull_request,
     list_open_pulls,
+    poll_open_pulls,
     post_review,
     read_token_file,
     take_write_token,
@@ -36,10 +39,10 @@ SKILL_SUBDIR = Path("skills") / "openqa"
 DEFAULT_CONFIG = Path("config/reviewer.yaml")
 DEFAULT_STATE = Path.home() / ".local/state/review-assistant/state.json"
 DEFAULT_SKILL_CACHE = Path.home() / ".cache/review-assistant/skills"
+DEFAULT_HEARTBEAT = Path("/tmp/heartbeat")  # noqa: S108 - liveness file of the container, tmpfs in the pod
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
-PER_PULL_ERRORS = (ReviewError, requests.RequestException, json.JSONDecodeError, pydantic.ValidationError)
 
 log = logging.getLogger(__name__)
 
@@ -56,17 +59,25 @@ class _Session:
     state: State
 
 
+def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--post", action="store_true", help="post the reviews; dry-run prints them instead")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="reviewer configuration file")
+    parser.add_argument("--read-token-file", type=Path, required=True, help="file holding the read-only GitHub token")
+    parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE, help="local record of posted reviews")
+    parser.add_argument("--skill-cache", type=Path, default=DEFAULT_SKILL_CACHE, help="directory for the pinned skill")
+    parser.add_argument("--clone", type=Path, required=True, help="openQA clone whose fetches give the PR heads")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="review-assistant")
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="review open pull requests of os-autoinst/openQA")
-    run.add_argument("--post", action="store_true", help="post the reviews; dry-run prints them instead")
+    _add_shared_arguments(run)
     run.add_argument("--limit", type=int, help="new reviews per run (default: pilot_cap of the config)")
-    run.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="reviewer configuration file")
-    run.add_argument("--read-token-file", type=Path, required=True, help="file holding the read-only GitHub token")
-    run.add_argument("--state-file", type=Path, default=DEFAULT_STATE, help="local record of posted reviews")
-    run.add_argument("--skill-cache", type=Path, default=DEFAULT_SKILL_CACHE, help="directory for the pinned skill")
-    run.add_argument("--clone", type=Path, required=True, help="openQA clone whose fetches give the PR heads")
+    daemon = commands.add_parser("daemon", help="review open pull requests of os-autoinst/openQA continuously")
+    _add_shared_arguments(daemon)
+    daemon.add_argument("--poll-interval", type=float, default=60, help="seconds between listings of open pulls")
+    daemon.add_argument("--heartbeat-file", type=Path, default=DEFAULT_HEARTBEAT, help="liveness timestamp file")
     return parser
 
 
@@ -108,15 +119,13 @@ def _post_token(*, post: bool) -> str | None:
     return token if post else None
 
 
-def _run(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+@contextmanager
+def _session(args: argparse.Namespace, config: ReviewerConfig) -> Iterator[_Session]:
     post_token = _post_token(post=args.post)
-    limit = args.limit if args.limit is not None else config.pilot_cap
     skill_root = checkout_skill(config.skill, args.skill_cache) / SKILL_SUBDIR
     read_token = read_token_file(args.read_token_file)
-    pulls = list_open_pulls(read_token, REPO)
     with tempfile.TemporaryDirectory(prefix="review-assistant-") as scratch_root:
-        session = _Session(
+        yield _Session(
             config=config,
             read_token=read_token,
             post_token=post_token,
@@ -126,7 +135,49 @@ def _run(args: argparse.Namespace) -> int:
             state_file=args.state_file,
             state=load_state(args.state_file),
         )
+
+
+def _run(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    limit = args.limit if args.limit is not None else config.pilot_cap
+    with _session(args, config) as session:
+        pulls = list_open_pulls(session.read_token, REPO)
         return _review_pulls(session, pulls, limit)
+
+
+def _request_stop(stop: threading.Event) -> Callable[[int, FrameType | None], None]:
+    def handler(_signum: int, _frame: FrameType | None) -> None:
+        log.info("stop requested; finishing the current review")
+        stop.set()
+
+    return handler
+
+
+def _install_stop_handlers(stop: threading.Event) -> None:
+    handler = _request_stop(stop)
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, handler)
+
+
+def _daemon(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    stop = threading.Event()
+    _install_stop_handlers(stop)
+    with _session(args, config) as session:
+        Daemon(
+            poll=lambda etag: poll_open_pulls(session.read_token, REPO, etag),
+            review=lambda summary: _review_one(session, summary),
+            recorded=lambda summary: is_reviewed(session.state, REPO, summary.number, summary.head_sha),
+            agent_name=config.agent_name,
+            limit=config.pilot_cap,
+            heartbeat=args.heartbeat_file,
+            poll_interval=args.poll_interval,
+            stop=stop,
+        ).run()
+    return EXIT_OK
+
+
+_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {"run": _run, "daemon": _daemon}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -135,7 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         make_non_dumpable()
-        return _run(args)
+        return _COMMANDS[args.command](args)
     except (GitHubError, HardeningError, ConfigError, SkillCheckoutError, ReviewError) as error:
         sys.stderr.write(f"error: {error}\n")
         return EXIT_USAGE

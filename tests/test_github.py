@@ -17,6 +17,7 @@ from review_assistant.github import (
     GitHubError,
     fetch_pull_request,
     list_open_pulls,
+    poll_open_pulls,
     post_review,
     read_token_file,
     take_write_token,
@@ -86,19 +87,38 @@ def test_open_pulls_are_listed_across_pages_with_read_token() -> None:
     with responses.RequestsMock() as rsps:
         rsps.get(
             PULLS,
-            json=[{"number": 1, "head": {"sha": HEAD}, "title": "One", "body": None}],
+            json=[
+                {
+                    "number": 1,
+                    "head": {"sha": HEAD},
+                    "title": "One",
+                    "body": None,
+                    "draft": False,
+                    "user": {"login": "alice"},
+                }
+            ],
             headers=first,
             match=[matchers.query_param_matcher({"state": "open", "per_page": "100"})],
         )
         rsps.get(
             PULLS,
-            json=[{"number": 2, "head": {"sha": "b" * 40}, "title": "Two", "body": "text"}],
+            json=[
+                {
+                    "number": 2,
+                    "head": {"sha": "b" * 40},
+                    "title": "Two",
+                    "body": "text",
+                    "draft": True,
+                    "user": {"login": "bob"},
+                }
+            ],
             match=[matchers.query_param_matcher({"page": "2"})],
         )
         pulls = list_open_pulls(READ_TOKEN, REPO)
         auth = rsps.calls[0].request.headers["Authorization"]
     assert [(pull.number, pull.title, pull.body) for pull in pulls] == [(1, "One", ""), (2, "Two", "text")]
     assert pulls[1].head_sha == "b" * 40
+    assert [(pull.draft, pull.author) for pull in pulls] == [(False, "alice"), (True, "bob")]
     assert auth == f"Bearer {READ_TOKEN}"
 
 
@@ -162,3 +182,77 @@ def test_review_event_outside_comment_and_approve_is_rejected_before_any_request
         with pytest.raises(pydantic.ValidationError):
             post_review(WRITE_TOKEN, REPO, 8079, review)
         assert len(rsps.calls) == 0
+
+
+def test_poll_lists_most_recently_updated_first_and_returns_validators() -> None:
+    first = {
+        "Link": f'<{PULLS}?page=2>; rel="next"',
+        "ETag": 'W/"etag-1"',
+        "X-RateLimit-Remaining": "4999",
+        "X-RateLimit-Reset": "1700000000",
+    }
+    with responses.RequestsMock() as rsps:
+        rsps.get(
+            PULLS,
+            json=[
+                {
+                    "number": 7,
+                    "head": {"sha": HEAD},
+                    "title": "Seven",
+                    "body": None,
+                    "draft": True,
+                    "user": {"login": "carol"},
+                }
+            ],
+            headers=first,
+            match=[
+                matchers.query_param_matcher({
+                    "state": "open",
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": "100",
+                })
+            ],
+        )
+        rsps.get(
+            PULLS,
+            json=[
+                {
+                    "number": 8,
+                    "head": {"sha": "c" * 40},
+                    "title": "Eight",
+                    "body": "",
+                    "draft": False,
+                    "user": {"login": "dave"},
+                }
+            ],
+            match=[matchers.query_param_matcher({"page": "2"})],
+        )
+        result = poll_open_pulls(READ_TOKEN, REPO, None)
+        sent = rsps.calls[0].request.headers
+    assert [(pull.number, pull.draft, pull.author) for pull in result.pulls or []] == [
+        (7, True, "carol"),
+        (8, False, "dave"),
+    ]
+    assert (result.etag, result.remaining, result.reset) == ('W/"etag-1"', 4999, 1700000000)
+    assert "If-None-Match" not in sent
+
+
+def test_poll_sends_etag_and_reports_not_modified_without_pulls() -> None:
+    with responses.RequestsMock() as rsps:
+        rsps.get(
+            PULLS,
+            status=304,
+            headers={"ETag": 'W/"etag-1"', "X-RateLimit-Remaining": "4990"},
+            match=[matchers.header_matcher({"If-None-Match": 'W/"etag-1"'})],
+        )
+        result = poll_open_pulls(READ_TOKEN, REPO, 'W/"etag-1"')
+    assert result.pulls is None
+    assert (result.etag, result.remaining, result.reset) == ('W/"etag-1"', 4990, None)
+
+
+def test_poll_http_error_propagates() -> None:
+    with responses.RequestsMock() as rsps:
+        rsps.get(PULLS, status=500)
+        with pytest.raises(requests.HTTPError):
+            poll_open_pulls(READ_TOKEN, REPO, None)

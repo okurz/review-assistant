@@ -3,6 +3,7 @@
 """GitHub access with two credentials: a read-only token for listing and diffs, the write token for reviews."""
 
 from collections.abc import Iterator, Mapping, MutableMapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,6 +31,18 @@ class PullSummary(BaseModel):
     head_sha: str
     title: str
     body: str
+    draft: bool
+    author: str
+
+
+@dataclass(frozen=True)
+class PollResult:
+    """One conditional listing: pulls is None when GitHub answered 304 Not Modified."""
+
+    pulls: list[PullSummary] | None
+    etag: str | None
+    remaining: int | None
+    reset: int | None
 
 
 class InlineComment(BaseModel):
@@ -85,29 +98,58 @@ def _get(
     return response
 
 
+def _follow(session: requests.Session, response: requests.Response) -> Iterator[dict[str, Any]]:
+    current: requests.Response | None = response
+    while current is not None:
+        yield from current.json()
+        next_url = current.links.get("next", {}).get("url")
+        current = _get(session, next_url, JSON_ACCEPT) if next_url else None
+
+
 def _paginate(session: requests.Session, url: str, params: Mapping[str, str]) -> Iterator[dict[str, Any]]:
-    next_url: str | None = url
-    next_params: Mapping[str, str] | None = params
-    while next_url:
-        response = _get(session, next_url, JSON_ACCEPT, next_params)
-        yield from response.json()
-        next_url = response.links.get("next", {}).get("url")
-        next_params = None
+    yield from _follow(session, _get(session, url, JSON_ACCEPT, params))
+
+
+def _summary(item: Mapping[str, Any]) -> PullSummary:
+    return PullSummary(
+        number=item["number"],
+        head_sha=item["head"]["sha"],
+        title=item["title"],
+        body=item["body"] or "",
+        draft=item["draft"],
+        author=item["user"]["login"],
+    )
+
+
+def _int_header(response: requests.Response, name: str) -> int | None:
+    value = response.headers.get(name)
+    return int(value) if value is not None else None
 
 
 def list_open_pulls(token: str, repo: str) -> list[PullSummary]:
     """List open pull requests of repo, following pagination."""
     session = _session(token)
     url = f"{API}/repos/{repo}/pulls"
-    return [
-        PullSummary(
-            number=item["number"],
-            head_sha=item["head"]["sha"],
-            title=item["title"],
-            body=item["body"] or "",
-        )
-        for item in _paginate(session, url, {"state": "open", "per_page": "100"})
-    ]
+    return [_summary(item) for item in _paginate(session, url, {"state": "open", "per_page": "100"})]
+
+
+def poll_open_pulls(token: str, repo: str, etag: str | None) -> PollResult:
+    """List open pulls of repo, most recently updated first, unless etag still matches (304, no pulls)."""
+    session = _session(token)
+    headers = {"Accept": JSON_ACCEPT} | ({"If-None-Match": etag} if etag else {})
+    response = session.get(
+        f"{API}/repos/{repo}/pulls",
+        headers=headers,
+        params={"state": "open", "sort": "updated", "direction": "desc", "per_page": "100"},
+        timeout=TIMEOUT_SECONDS,
+    )
+    remaining = _int_header(response, "X-RateLimit-Remaining")
+    reset = _int_header(response, "X-RateLimit-Reset")
+    if response.status_code == requests.codes.not_modified:
+        return PollResult(pulls=None, etag=etag, remaining=remaining, reset=reset)
+    response.raise_for_status()
+    pulls = [_summary(item) for item in _follow(session, response)]
+    return PollResult(pulls=pulls, etag=response.headers.get("ETag"), remaining=remaining, reset=reset)
 
 
 def fetch_pull_request(token: str, repo: str, number: int) -> PullRequest:

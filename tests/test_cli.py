@@ -4,6 +4,7 @@
 
 import json
 import os
+import signal
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from pytest_mock import MockerFixture
 
 from review_assistant.cli import EXIT_FAILED, EXIT_OK, EXIT_USAGE, main
 from review_assistant.config import ReviewerConfig
-from review_assistant.github import PullSummary, ReviewDraft
+from review_assistant.github import PollResult, PullSummary, ReviewDraft
 from review_assistant.hardening import HardeningError
 from review_assistant.review import PullRequest, ReviewError, Workspace
 from review_assistant.state import ReviewRecord, load_state, save_state, state_key
@@ -29,7 +30,10 @@ def _head(number: int) -> str:
     return str(number) * 40
 
 
-PULLS = [PullSummary(number=n, head_sha=_head(n), title=f"PR {n}", body="") for n in PULL_NUMBERS]
+PULLS = [
+    PullSummary(number=n, head_sha=_head(n), title=f"PR {n}", body="", draft=False, author="contributor")
+    for n in PULL_NUMBERS
+]
 
 
 @pytest.fixture
@@ -194,3 +198,30 @@ def test_clone_path_is_required(
     with pytest.raises(SystemExit):
         main(argv)
     assert "--clone" in capsys.readouterr().err
+
+
+def _daemon_argv(ns: SimpleNamespace, heartbeat: Path, *extra: str) -> list[str]:
+    return ["daemon", *_argv(ns, "--heartbeat-file", str(heartbeat), "--poll-interval", "0", *extra)[1:]]
+
+
+def test_daemon_sweeps_then_stops_between_reviews_on_sigterm(
+    fakes: SimpleNamespace, mocker: MockerFixture, tmp_path: Path
+) -> None:
+    _with_write_token(mocker)
+    signal_mock = mocker.patch("review_assistant.cli.signal.signal")
+    polls: list[str | None] = []
+
+    def poll(_token: str, _repo: str, etag: str | None) -> PollResult:
+        polls.append(etag)
+        if len(polls) == 1:
+            return PollResult(pulls=PULLS, etag="v1", remaining=5000, reset=None)
+        signal_mock.call_args_list[0].args[1](signal.SIGTERM, None)
+        return PollResult(pulls=None, etag="v1", remaining=5000, reset=None)
+
+    mocker.patch("review_assistant.cli.poll_open_pulls", side_effect=poll)
+    assert main(_daemon_argv(fakes, tmp_path / "heartbeat", "--post")) == EXIT_OK
+    assert polls == [None, "v1"]
+    assert [call.args[2] for call in fakes.post_review.call_args_list] == list(PULL_NUMBERS)
+    assert set(load_state(fakes.state_file)) == {state_key(REPO, n) for n in PULL_NUMBERS}
+    assert {call.args[0] for call in signal_mock.call_args_list} == {signal.SIGTERM, signal.SIGINT}
+    assert (tmp_path / "heartbeat").exists()
