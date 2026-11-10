@@ -11,8 +11,7 @@ authors = [
 dependencies = [
     "requests",
     "PyYAML",
-    "pydantic-settings",
-    "python-dotenv",
+    "pydantic",
 ]
 
 [project.urls]

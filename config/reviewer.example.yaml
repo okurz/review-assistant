@@ -1,0 +1,7 @@
+agent_name: os-autoinst-review
+skill:
+  repo: https://github.com/os-autoinst/openQA-skill.git
+  sha: a6d255abcbce
+model: google-vertex/claude-haiku-5-5@default
+comment_only: true
+pilot_cap: 10
