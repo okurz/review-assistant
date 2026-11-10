@@ -19,7 +19,7 @@ from review_assistant.github import (
     list_open_pulls,
     post_review,
     read_token_file,
-    write_token_from_env,
+    take_write_token,
 )
 
 REPO = "os-autoinst/openQA"
@@ -63,8 +63,10 @@ def test_empty_token_file_is_rejected(tmp_path: Path, raw: str) -> None:
         read_token_file(token_file)
 
 
-def test_write_token_is_read_from_environment() -> None:
-    assert write_token_from_env({"REVIEW_ASSISTANT_GH_TOKEN": WRITE_TOKEN}) == WRITE_TOKEN
+def test_write_token_is_taken_out_of_environment() -> None:
+    environ = {"REVIEW_ASSISTANT_GH_TOKEN": WRITE_TOKEN, "PATH": "/usr/bin"}
+    assert take_write_token(environ) == WRITE_TOKEN
+    assert environ == {"PATH": "/usr/bin"}
 
 
 @pytest.mark.parametrize(
@@ -74,9 +76,9 @@ def test_write_token_is_read_from_environment() -> None:
         pytest.param({"REVIEW_ASSISTANT_GH_TOKEN": "  "}, id="blank"),
     ],
 )
-def test_missing_write_token_is_rejected(environ: dict[str, str]) -> None:
-    with pytest.raises(GitHubError, match="REVIEW_ASSISTANT_GH_TOKEN"):
-        write_token_from_env(environ)
+def test_missing_write_token_is_empty_and_environment_stays_clean(environ: dict[str, str]) -> None:
+    assert not take_write_token(environ)
+    assert "REVIEW_ASSISTANT_GH_TOKEN" not in environ
 
 
 def test_open_pulls_are_listed_across_pages_with_read_token() -> None:

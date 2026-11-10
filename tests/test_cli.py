@@ -132,6 +132,13 @@ def test_post_without_write_token_fails_before_listing(fakes: SimpleNamespace, m
     fakes.listing.assert_not_called()
 
 
+def test_dry_run_removes_write_token_so_agent_cannot_inherit_it(fakes: SimpleNamespace, mocker: MockerFixture) -> None:
+    _with_write_token(mocker)
+    assert main(_argv(fakes)) == EXIT_OK
+    assert "REVIEW_ASSISTANT_GH_TOKEN" not in os.environ
+    fakes.post_review.assert_not_called()
+
+
 def test_reviewed_head_is_skipped(fakes: SimpleNamespace) -> None:
     save_state(fakes.state_file, {state_key(REPO, 1): ReviewRecord(head_sha=_head(1), review_id=1)})
     assert main(_argv(fakes)) == EXIT_OK

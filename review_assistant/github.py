@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """GitHub access with two credentials: a read-only token for listing and diffs, the write token for COMMENT reviews."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -58,10 +58,9 @@ def read_token_file(path: Path) -> str:
     return _non_empty(path.read_text(encoding="utf-8"), str(path))
 
 
-def write_token_from_env(environ: Mapping[str, str]) -> str:
-    """Return the write token from REVIEW_ASSISTANT_GH_TOKEN, the only source for it."""
-    name = "REVIEW_ASSISTANT_GH_TOKEN"
-    return _non_empty(environ.get(name, ""), name)
+def take_write_token(environ: MutableMapping[str, str]) -> str:
+    """Return the write token and remove it from environ, so no child process inherits it."""
+    return environ.pop("REVIEW_ASSISTANT_GH_TOKEN", "").strip()
 
 
 def _non_empty(raw: str, source: str) -> str:

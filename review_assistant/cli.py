@@ -23,7 +23,7 @@ from review_assistant.github import (
     list_open_pulls,
     post_review,
     read_token_file,
-    write_token_from_env,
+    take_write_token,
 )
 from review_assistant.review import ReviewError, review_pull_request
 from review_assistant.skill import checkout_skill
@@ -94,9 +94,17 @@ def _review_pulls(session: _Session, pulls: Sequence[PullSummary], limit: int) -
     return EXIT_FAILED if failures else EXIT_OK
 
 
+def _post_token(*, post: bool) -> str | None:
+    token = take_write_token(os.environ)
+    if post and not token:
+        msg = "REVIEW_ASSISTANT_GH_TOKEN is not set; --post needs it"
+        raise GitHubError(msg)
+    return token if post else None
+
+
 def _run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    post_token = write_token_from_env(os.environ) if args.post else None
+    post_token = _post_token(post=args.post)
     limit = args.limit if args.limit is not None else config.pilot_cap
     skill_root = checkout_skill(config.skill, args.skill_cache) / SKILL_SUBDIR
     read_token = read_token_file(args.read_token_file)
