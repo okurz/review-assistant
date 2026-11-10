@@ -19,6 +19,7 @@ Homepage = "https://progress.opensuse.org/issues/210027"
 
 [project.scripts]
 review-assistant = "review_assistant.cli:main"
+review-assistant-container = "review_assistant.container:main"
 
 [build-system]
 requires = ["setuptools>=80"]
