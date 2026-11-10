@@ -7,7 +7,7 @@ RUN zypper --non-interactive install --no-recommends git gh python313 python314 
 # Hermes v0.22.2 is installed from its source at the pinned commit with its uv.lock, which resolves for Python 3.14 only.
 RUN git clone --no-checkout https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent \
     && git -C /opt/hermes-agent checkout --detach d923a5eb487a17c0a68801bba9ef0f56c81040a8 \
-    && cd /opt/hermes-agent && uv sync --frozen --no-dev --python /usr/bin/python3.14
+    && cd /opt/hermes-agent && uv sync --frozen --no-dev --extra vertex --python /usr/bin/python3.14
 
 # Only package sources are copied: credentials live outside the repository and must not enter the image.
 WORKDIR /opt/review-assistant
