@@ -2,6 +2,8 @@
 
 Operator runbook for the review-assistant workload in the SUSE OpenPlatform Rancher Prime cluster (the OpenPlatform Rancher Prime dashboard). Manifests live in `deploy/kubernetes/`. Tracker: https://progress.opensuse.org/issues/210027
 
+The workload is a single-replica `Deployment` running `review-assistant daemon`, which polls open `os-autoinst/openQA` pull requests every 60 seconds and reviews them one at a time.
+
 Run commands from the repository root with a kubeconfig for the target cluster. Stop before any live change that the plan gates on approval (`tasks/002_poo210027_automated_model_review_in_openplatform_container.md`, `## Approvals`).
 
 ## Access
@@ -10,7 +12,7 @@ Run commands from the repository root with a kubeconfig for the target cluster. 
 2. Open the cluster and download its kubeconfig from the cluster menu, or use `kubectl` through the Rancher CLI login.
 3. Confirm the context: `kubectl config current-context` and `kubectl get ns review-assistant`.
 
-In the Rancher UI, the workloads are under the Cluster Explorer, namespace `review-assistant`, in the Workload menu (CronJobs, Jobs, Pods) and the Storage menu (PersistentVolumeClaims). Menu names depend on the Rancher version.
+In the Rancher UI, the workload is under the Cluster Explorer, namespace `review-assistant`, in the Workload menu (Deployments, Pods, Jobs) and the Storage menu (PersistentVolumeClaims). Menu names depend on the Rancher version.
 
 ## Provision secrets
 
@@ -38,11 +40,13 @@ Or create the Secret in the Rancher UI under Storage > Secrets in namespace `rev
 ## Deploy
 
 1. Validate the manifests: `make check-k8s`.
-2. Apply the base workload with the OpenPlatform overlay: `kubectl apply -k deploy/kubernetes/overlays/openplatform`.
+2. Apply the workload with the OpenPlatform overlay: `kubectl apply -k deploy/kubernetes/overlays/openplatform`.
 
-This creates the namespace, ServiceAccount, ConfigMap, PersistentVolumeClaim `review-assistant-state`, NetworkPolicy and the CronJob `review-assistant`. The CronJob runs hourly in dry-run mode (no `--post`).
+This creates the namespace, ServiceAccount, ConfigMap, PersistentVolumeClaim `review-assistant-state`, NetworkPolicy and the Deployment `review-assistant`. The Deployment starts the daemon in dry-run mode (no `--post`), so it prints reviews and does not post them.
 
 ## One-off dry run (stage 1)
+
+Use this before the Deployment to check connectivity, secrets and one review end to end. It runs a single `review-assistant run` and exits:
 
 ```
 kubectl -n review-assistant delete job review-assistant-dry-run --ignore-not-found
@@ -53,48 +57,62 @@ kubectl -n review-assistant logs job/review-assistant-dry-run
 
 Expected: exit code 0 and a generated review in the log, with no GitHub post. Check the pod status for `Error` or `CrashLoopBackOff` if the wait fails.
 
-## Scheduled dry run (stage 2)
+## Continuous dry run (stage 2)
 
-Apply the overlay (step 2 of Deploy) and confirm the schedule and policy:
-
-```
-kubectl -n review-assistant get cronjob review-assistant -o jsonpath='{.spec.schedule} {.spec.concurrencyPolicy} {.spec.suspend}{"\n"}'
-```
-
-Expected: `0 * * * * Forbid` with `suspend` empty or `false`. Let it run for 24 hours and check `kubectl -n review-assistant get jobs,pods` for one completed job per hour.
-
-## Logs and history
+After step 2 of Deploy, confirm the Deployment is up:
 
 ```
-kubectl -n review-assistant get cronjob,jobs,pods
-kubectl -n review-assistant logs -l app.kubernetes.io/name=review-assistant --tail=200
+kubectl -n review-assistant get deployment review-assistant
+kubectl -n review-assistant get pods -l app.kubernetes.io/name=review-assistant
 ```
 
-Rancher UI: CronJobs and Jobs views list the run history; each pod has a Logs tab.
+Expected: one pod, `1/1` ready. The first log lines are the startup sweep over all open pull requests; afterwards each idle poll logs nothing new, because an unchanged listing answers `304 Not Modified` and costs no rate limit. Let it run for 24 hours and check that the pod has not restarted (`RESTARTS` stays at 0).
+
+## Logs
+
+```
+kubectl -n review-assistant logs deployment/review-assistant --tail=200 -f
+```
+
+Rancher UI: the Deployment's Pods list shows status and restarts; each pod has a Logs tab.
+
+## Heartbeat and liveness
+
+The daemon touches `/tmp/heartbeat` on every poll cycle and before every review. The liveness probe runs `test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 300` every 60 seconds after an initial 60 seconds, and restarts the pod after three consecutive failures.
+
+To verify the probe by hand, print the heartbeat age; it should be under 300 seconds:
+
+```
+kubectl -n review-assistant exec deployment/review-assistant -- sh -c 'echo $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) ))'
+```
+
+A review that runs longer than the probe window without a heartbeat causes a restart. If that happens, the review is retried after its cooldown.
 
 ## Pause and resume
 
-Pause the schedule without deleting anything:
+Pause the daemon without deleting anything. It stops polling and reviewing, and a review in progress finishes before the pod exits (`terminationGracePeriodSeconds: 300`):
 
 ```
-kubectl -n review-assistant patch cronjob review-assistant -p '{"spec":{"suspend":true}}'
+kubectl -n review-assistant scale deployment review-assistant --replicas=0
 ```
 
 Resume:
 
 ```
-kubectl -n review-assistant patch cronjob review-assistant -p '{"spec":{"suspend":false}}'
+kubectl -n review-assistant scale deployment review-assistant --replicas=1
 ```
 
-A running job is not stopped by suspend. Stop it with `kubectl -n review-assistant delete job <name>`.
+## Rolling update
+
+The strategy is `Recreate`: the old pod stops before the new pod starts, so two daemons never write `state.json` at the same time. Expect a short gap in reviews on each rollout, not overlapping pods.
 
 ## Rollback
 
 The image tag is `latest` in `deploy/kubernetes/overlays/openplatform/kustomization.yaml`. To roll back, set `newTag` to the previous short SHA (published by `.github/workflows/container.yml`), commit that change, and run `kubectl apply -k deploy/kubernetes/overlays/openplatform`. For a manifest rollback, `git revert` the offending commit and apply again.
 
-To disable completely: `kubectl -n review-assistant delete cronjob review-assistant`. Re-apply the overlay to restore it.
+To disable completely, scale to 0 as in Pause and resume, or delete the Deployment with `kubectl -n review-assistant delete deployment review-assistant`. Re-apply the overlay to restore it.
 
 ## Not covered here
 
-- Live posting (`--post --limit 1`) is a separate approved change to the CronJob args; it is not part of this runbook.
+- Live posting (`--post`) is a separate approved change to the Deployment args; it is not part of this runbook.
 - Cluster, node, and StorageClass administration on the target cluster is out of scope.
