@@ -24,6 +24,13 @@ spec:
       containers:
         - name: review-assistant
           image: ghcr.io/os-autoinst/review-assistant:latest
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
           args:
             - run
             - --limit
