@@ -8,7 +8,7 @@ images:
     newName: ghcr.io/os-autoinst/review-assistant
     newTag: latest
 patches:
-  - path: cronjob-patch.yaml
+  - path: deployment-patch.yaml
     target:
-      kind: CronJob
+      kind: Deployment
       name: review-assistant
