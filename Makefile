@@ -77,6 +77,10 @@ check-types-ty: ## Run ty type checker
 .PHONY: check-types
 check-types: check-types-ty
 
+.PHONY: check-k8s
+check-k8s: ## Validate Kubernetes manifests and scan for committed credentials
+	deploy/kubernetes/validate.sh
+
 .PHONY: check-lock
 check-lock: ## Verify uv.lock is in sync with pyproject.toml
 ifeq ($(UV_AVAILABLE),1)
