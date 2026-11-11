@@ -41,8 +41,8 @@ class HostPaths:
     image: str = IMAGE
 
 
-def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
-    """Return the podman argv that runs one review pass in a fresh container."""
+def build_run_argv(paths: HostPaths, review_args: Sequence[str], command: str = "run") -> list[str]:
+    """Return the podman argv that runs one review pass (or another CLI command) in a fresh container."""
     return [
         "podman",
         "run",
@@ -74,7 +74,7 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "-v",
         f"{paths.clone}:{CONTAINER_CLONE}:rw",
         paths.image,
-        "run",
+        command,
         "--config",
         CONTAINER_CONFIG,
         "--state-file",
@@ -107,10 +107,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="review-assistant-container")
     parser.add_argument("--post", action="store_true", help="post the reviews instead of a dry run")
     parser.add_argument("--limit", type=int, help="new reviews per run")
+    parser.add_argument("--check-isolation", action="store_true", help="check what the agent can reach, review nothing")
     args = parser.parse_args(argv)
-    review_args = ["--post"] if args.post else []
-    if args.limit is not None:
-        review_args += ["--limit", str(args.limit)]
+    review_args = (["--post"] if args.post else []) + (["--limit", str(args.limit)] if args.limit is not None else [])
+    command, review_args = ("check-isolation", []) if args.check_isolation else ("run", review_args)
     paths = default_host_paths(Path(__file__).resolve().parents[1])
     env = os.environ | {GH_READ_ENV: paths.read_token_file.read_text(encoding="utf-8").strip()}
-    return subprocess.run(build_run_argv(paths, review_args), check=False, env=env).returncode  # noqa: S603 - argv built here, no shell
+    return subprocess.run(build_run_argv(paths, review_args, command), check=False, env=env).returncode  # noqa: S603 - argv built here, no shell

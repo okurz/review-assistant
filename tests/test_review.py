@@ -30,10 +30,15 @@ PR = PullRequest(
 )
 
 
+SECRET = "read-token-placeholder"
+
+
 class _FakeRunner:
     def __init__(
         self,
         *,
+        review_text: str = "{}",
+        hermes_out: str = "",
         hermes_rc: int = 0,
         lint_rc: int = 0,
         lint_out: str = "",
@@ -41,6 +46,8 @@ class _FakeRunner:
         head: str = HEAD,
         git_rc: int = 0,
     ) -> None:
+        self.review_text = review_text
+        self.hermes_out = hermes_out
         self.hermes_rc = hermes_rc
         self.lint_rc = lint_rc
         self.lint_out = lint_out
@@ -53,8 +60,11 @@ class _FakeRunner:
         self.calls.append(list(argv))
         if argv[0] == "env":
             if self.write_review and self.hermes_rc == 0:
-                (Path(argv[argv.index("--in") + 1]) / f"review-{NUMBER}.json").write_text("{}", encoding="utf-8")
-            return subprocess.CompletedProcess(argv, self.hermes_rc, stdout="", stderr="hermes failed")
+                review = Path(argv[argv.index("--in") + 1]) / f"review-{NUMBER}.json"
+                review.write_text(self.review_text, encoding="utf-8")
+            return subprocess.CompletedProcess(
+                argv, self.hermes_rc, stdout="", stderr=self.hermes_out or "hermes failed"
+            )
         if argv[0] == "python3":
             return subprocess.CompletedProcess(argv, self.lint_rc, stdout=self.lint_out, stderr="")
         if "rev-parse" in argv:
@@ -66,7 +76,7 @@ class _FakeRunner:
 
 
 def _review(tmp_path: Path, runner: _FakeRunner) -> Path:
-    return review_pull_request(CONFIG, PR, Workspace(SKILL_ROOT, tmp_path, CLONE), runner)
+    return review_pull_request(CONFIG, PR, Workspace(SKILL_ROOT, tmp_path, CLONE, (SECRET, "")), runner)
 
 
 def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path) -> None:
@@ -183,6 +193,33 @@ def test_passing_review_is_linted_in_python_with_changed_lines(tmp_path: Path) -
 def test_failed_review_is_rejected(tmp_path: Path, runner: _FakeRunner, message: str) -> None:
     with pytest.raises(ReviewError, match=message):
         _review(tmp_path, runner)
+
+
+@pytest.mark.parametrize(
+    "review_text",
+    [
+        pytest.param(f'{{"body": "{SECRET}"}}', id="known-token"),
+        pytest.param('{"comments": [{"body": "ghp_' + "a" * 36 + '"}]}', id="github-token-pattern"),
+    ],
+)
+def test_review_with_a_credential_is_rejected_before_lint(tmp_path: Path, review_text: str) -> None:
+    runner = _FakeRunner(review_text=review_text)
+    with pytest.raises(ReviewError, match="contains a credential"):
+        _review(tmp_path, runner)
+    assert all(call[0] != "python3" for call in runner.calls)
+
+
+@pytest.mark.parametrize(
+    "runner",
+    [
+        pytest.param(_FakeRunner(hermes_rc=1, hermes_out=f"my token is {SECRET}"), id="hermes-reply"),
+        pytest.param(_FakeRunner(lint_rc=1, lint_out=f"line 3: {SECRET}"), id="lint-finding"),
+    ],
+)
+def test_agent_output_in_errors_is_redacted(tmp_path: Path, runner: _FakeRunner) -> None:
+    with pytest.raises(ReviewError, match=r"\[redacted\]") as error:
+        _review(tmp_path, runner)
+    assert SECRET not in str(error.value)
 
 
 def test_stale_review_from_earlier_run_is_not_accepted(tmp_path: Path) -> None:

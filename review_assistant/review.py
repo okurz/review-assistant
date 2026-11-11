@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from review_assistant.config import ReviewerConfig
+from review_assistant.secret_filter import holds_secret, redact
 
 PLAYBOOK = "openqa-pr-review"
 LINT_SCRIPT = Path("scripts") / "review-lint.py"
@@ -35,11 +36,12 @@ class PullRequest:
 
 @dataclass(frozen=True)
 class Workspace:
-    """Where a review runs: the pinned skill, the scratch root, and the openQA clone."""
+    """Where a review runs: the pinned skill, the scratch root, the openQA clone, and the values never to echo."""
 
     skill_root: Path
     scratch_root: Path
     clone: Path
+    secrets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -103,10 +105,14 @@ def _prompt(pr: PullRequest, skill_root: Path, scratch: Scratch) -> str:
     )
 
 
+def agent_env(directory: Path) -> list[str]:
+    """Return the argv prefix that confines the agent's file writes to directory."""
+    return ["env", f"HERMES_WRITE_SAFE_ROOT={directory}"]
+
+
 def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path) -> list[str]:
     return [
-        "env",
-        f"HERMES_WRITE_SAFE_ROOT={directory}",
+        *agent_env(directory),
         "hermes",
         "-z",
         prompt,
@@ -121,15 +127,15 @@ def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path) -> list[s
     ]
 
 
-def review_pull_request(
-    config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runner: CommandRunner = run_command
-) -> Path:
-    """Check out pr, have Hermes draft its review, lint it in Python, and return the passing review JSON."""
+def _review(config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runner: CommandRunner) -> Path:
     scratch = _prepare_scratch(workspace.scratch_root, pr)
     checkout_pr(workspace.clone, pr, scratch, runner)
     _check(runner(_hermes_argv(config, _prompt(pr, workspace.skill_root, scratch), scratch.directory)), "hermes")
     if not scratch.review.is_file():
         msg = f"hermes wrote no review at {scratch.review}"
+        raise ReviewError(msg)
+    if holds_secret(scratch.review.read_text(encoding="utf-8"), workspace.secrets):
+        msg = f"review at {scratch.review} contains a credential"
         raise ReviewError(msg)
     lint_argv = [
         "python3",
@@ -140,3 +146,17 @@ def review_pull_request(
     ]
     _check(runner(lint_argv), "review-lint")
     return scratch.review
+
+
+def review_pull_request(
+    config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runner: CommandRunner = run_command
+) -> Path:
+    """Check out pr, have Hermes draft its review, lint it, and return the review JSON if it holds no credential.
+
+    Errors carry agent-authored output (Hermes' reply, review-lint findings), so they are redacted before they reach
+    a log.
+    """
+    try:
+        return _review(config, pr, workspace, runner)
+    except ReviewError as error:
+        raise ReviewError(redact(str(error), workspace.secrets)) from None

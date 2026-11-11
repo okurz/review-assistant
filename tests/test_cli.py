@@ -5,6 +5,7 @@
 import json
 import os
 import signal
+import subprocess  # noqa: S404 - builds CompletedProcess fixtures only
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -217,6 +218,81 @@ def test_failed_pull_is_logged_and_not_recorded_while_run_continues(
     assert main(_argv(fakes, "--post")) == EXIT_FAILED
     assert set(load_state(fakes.state_file)) == {state_key(REPO, 2), state_key(REPO, 3)}
     assert f"{REPO}#1 not recorded" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("post", "secrets"),
+    [
+        pytest.param(True, (READ_TOKEN, WRITE_TOKEN), id="post-guards-both-tokens"),
+        pytest.param(False, (READ_TOKEN, ""), id="dry-run-guards-read-token"),
+    ],
+)
+def test_review_is_told_which_tokens_must_never_appear(
+    fakes: SimpleNamespace, mocker: MockerFixture, *, post: bool, secrets: tuple[str, str]
+) -> None:
+    _with_write_token(mocker)
+    main(_argv(fakes, *(["--post"] if post else [])))
+    assert fakes.review.call_args.args[2].secrets == secrets
+
+
+def _check_argv(ns: SimpleNamespace) -> list[str]:
+    return ["check-isolation", *_argv(ns)[1:]]
+
+
+@pytest.fixture
+def isolation_script(mocker: MockerFixture, tmp_path: Path) -> Path:
+    script = tmp_path / "check-isolation.sh"
+    script.touch()
+    mocker.patch("review_assistant.cli.ISOLATION_CHECK", script)
+    return script
+
+
+def test_check_isolation_runs_script_as_the_agent_would_run(
+    fakes: SimpleNamespace, mocker: MockerFixture, isolation_script: Path
+) -> None:
+    _with_write_token(mocker)
+    environ_at_run: list[dict[str, str]] = []
+
+    def script(argv: list[str], **_kwargs: bool) -> subprocess.CompletedProcess[str]:
+        environ_at_run.append(dict(os.environ))
+        return subprocess.CompletedProcess(argv, 3)
+
+    run = mocker.patch("review_assistant.cli.subprocess.run", side_effect=script)
+    assert main(_check_argv(fakes)) == 3
+    argv = run.call_args.args[0]
+    scratch = argv[-1]
+    assert argv == [
+        "env",
+        f"HERMES_WRITE_SAFE_ROOT={scratch}",
+        str(isolation_script),
+        str(fakes.state_file),
+        str(fakes.clone),
+        str(fakes.checkout.return_value),
+        scratch,
+    ]
+    assert not {"REVIEW_ASSISTANT_GH_TOKEN", "REVIEW_ASSISTANT_GH_READ_TOKEN"} & set(environ_at_run[0])
+    fakes.listing.assert_not_called()
+
+
+@pytest.mark.usefixtures("isolation_script")
+def test_check_isolation_needs_the_write_token_to_prove_its_removal(
+    fakes: SimpleNamespace, mocker: MockerFixture
+) -> None:
+    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN}, clear=True)
+    run = mocker.patch("review_assistant.cli.subprocess.run")
+    assert main(_check_argv(fakes)) == EXIT_USAGE
+    run.assert_not_called()
+
+
+def test_check_isolation_outside_the_image_fails_cleanly(
+    fakes: SimpleNamespace, mocker: MockerFixture, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _with_write_token(mocker)
+    mocker.patch("review_assistant.cli.ISOLATION_CHECK", tmp_path / "absent.sh")
+    run = mocker.patch("review_assistant.cli.subprocess.run")
+    assert main(_check_argv(fakes)) == EXIT_USAGE
+    assert "runs inside the image" in capsys.readouterr().err
+    run.assert_not_called()
 
 
 def test_failed_hardening_stops_before_any_listing(fakes: SimpleNamespace, mocker: MockerFixture) -> None:

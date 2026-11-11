@@ -6,6 +6,7 @@ import subprocess  # noqa: S404 - git is an external interface, argv only, no sh
 from pathlib import Path
 
 from review_assistant.config import SkillConfig
+from review_assistant.review import GIT
 
 
 class SkillCheckoutError(RuntimeError):
@@ -13,7 +14,14 @@ class SkillCheckoutError(RuntimeError):
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
-    result = subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)  # noqa: S603, S607 - fixed git argv, resolved from PATH
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed git argv, no shell
+            [*GIT, *args], cwd=cwd, check=True, capture_output=True, text=True
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() or str(error)
+        msg = f"git {args[0]} failed while checking out the skill: {detail}"
+        raise SkillCheckoutError(msg) from None
     return result.stdout.strip()
 
 

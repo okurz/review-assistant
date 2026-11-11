@@ -22,5 +22,7 @@ COPY pyproject.toml Readme.md ./
 COPY review_assistant ./review_assistant
 RUN uv venv --python /usr/bin/python3.13 /opt/venv && VIRTUAL_ENV=/opt/venv uv pip install .
 
+COPY --chmod=0755 deploy/check-isolation.sh /opt/check-isolation.sh
+
 ENV PATH=/opt/venv/bin:/opt/hermes-agent/.venv/bin:$PATH
 ENTRYPOINT ["review-assistant"]

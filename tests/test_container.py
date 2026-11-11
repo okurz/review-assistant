@@ -156,6 +156,13 @@ def test_main_without_post_runs_a_dry_run(podman: MagicMock) -> None:
     assert "--post" not in podman.call_args.args[0]
 
 
+def test_main_check_isolation_runs_the_check_command_without_review_flags(podman: MagicMock) -> None:
+    main(["--check-isolation", "--post"])
+    argv = podman.call_args.args[0]
+    assert argv[argv.index(IMAGE) + 1] == "check-isolation"
+    assert "--post" not in argv
+
+
 def test_main_hands_read_token_to_podman_through_its_environment_only(podman: MagicMock) -> None:
     main([])
     assert podman.call_args.kwargs["env"]["REVIEW_ASSISTANT_GH_READ_TOKEN"] == READ_TOKEN
