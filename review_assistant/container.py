@@ -13,7 +13,8 @@ from review_assistant.github import GH_READ_ENV
 
 IMAGE = "review-assistant:dev"
 CONTAINER_CONFIG = "/config/reviewer.yaml"
-CONTAINER_STATE = "/state/state.json"
+CONTAINER_STATE_DIR = "/state"
+CONTAINER_STATE = f"{CONTAINER_STATE_DIR}/state.json"
 CONTAINER_SKILL_CACHE = "/opt/skills"
 CONTAINER_CLONE = "/cache/openQA"
 CONTAINER_GCLOUD_DIR = "/run/secrets/gcloud"
@@ -35,7 +36,7 @@ class HostPaths:
     env_file: Path
     config_file: Path
     hermes_config_file: Path
-    state_file: Path
+    state_dir: Path
     clone: Path
     image: str = IMAGE
 
@@ -69,7 +70,7 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "-v",
         f"{paths.hermes_config_file}:{CONTAINER_HERMES_CONFIG}:ro",
         "-v",
-        f"{paths.state_file}:{CONTAINER_STATE}:rw",
+        f"{paths.state_dir}:{CONTAINER_STATE_DIR}:rw",
         "-v",
         f"{paths.clone}:{CONTAINER_CLONE}:rw",
         paths.image,
@@ -96,7 +97,7 @@ def default_host_paths(repo: Path) -> HostPaths:
         env_file=config_home / "write.env",
         config_file=repo / "config" / "reviewer.yaml",
         hermes_config_file=repo / "deploy" / "hermes" / "config.yaml",
-        state_file=home / ".local" / "state" / "review-assistant" / "state.json",
+        state_dir=home / ".local" / "state" / "review-assistant",
         clone=home / ".cache" / "review-assistant" / "openQA",
     )
 

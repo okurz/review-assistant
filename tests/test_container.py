@@ -25,7 +25,7 @@ def _paths(tmp_path: Path) -> HostPaths:
         env_file=tmp_path / "write.env",
         config_file=tmp_path / "reviewer.yaml",
         hermes_config_file=tmp_path / "config.yaml",
-        state_file=tmp_path / "state.json",
+        state_dir=tmp_path / "state",
         clone=tmp_path / "openQA",
     )
 
@@ -57,7 +57,7 @@ def test_run_is_hardened(tmp_path: Path, flag: str) -> None:
         pytest.param("/run/secrets/gcloud/application_default_credentials.json", "ro", id="adc-read-only"),
         pytest.param("/config/reviewer.yaml", "ro", id="config-read-only"),
         pytest.param("/hermes/config.yaml", "ro", id="hermes-config-read-only"),
-        pytest.param("/state/state.json", "rw", id="state-writable"),
+        pytest.param("/state", "rw", id="state-directory-writable-for-atomic-replace"),
         pytest.param("/cache/openQA", "rw", id="clone-writable"),
     ],
 )

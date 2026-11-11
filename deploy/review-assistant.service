@@ -8,6 +8,5 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=%h/local/ai/review-assistant
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/review-assistant
-ExecStartPre=/usr/bin/touch %h/.local/state/review-assistant/state.json
 ExecStart=%h/local/ai/review-assistant/.venv/bin/review-assistant-container
 TimeoutStartSec=2h
