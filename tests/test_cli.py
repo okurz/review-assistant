@@ -18,10 +18,12 @@ from review_assistant.config import ReviewerConfig
 from review_assistant.github import PollResult, PullSummary, ReviewDraft
 from review_assistant.hardening import HardeningError
 from review_assistant.review import PullRequest, ReviewError, Workspace
+from review_assistant.skill import SkillCheckoutError
 from review_assistant.state import ReviewRecord, load_state, save_state, state_key
 
 REPO = "os-autoinst/openQA"
 EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
+READ_TOKEN = "read-token-placeholder"
 WRITE_TOKEN = "write-token-placeholder"
 PULL_NUMBERS = (1, 2, 3)
 
@@ -38,10 +40,8 @@ PULLS = [
 
 @pytest.fixture
 def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
-    token_file = tmp_path / "read-token"
-    token_file.write_text("read-token-placeholder", encoding="utf-8")
+    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN})
     ns = SimpleNamespace(
-        token_file=token_file,
         state_file=tmp_path / "state.json",
         skill_cache=tmp_path / "skills",
         clone=tmp_path / "openQA",
@@ -84,7 +84,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
         return 5000 + number
 
     mocker.patch("review_assistant.cli.make_non_dumpable")
-    mocker.patch("review_assistant.cli.checkout_skill", return_value=tmp_path / "checkout")
+    ns.checkout = mocker.patch("review_assistant.cli.checkout_skill", return_value=tmp_path / "checkout")
     ns.listing = mocker.patch("review_assistant.cli.list_open_pulls", return_value=PULLS)
     ns.fetch = mocker.patch("review_assistant.cli.fetch_pull_request", side_effect=fetch)
     ns.review = mocker.patch("review_assistant.cli.review_pull_request", side_effect=draft)
@@ -97,8 +97,6 @@ def _argv(ns: SimpleNamespace, *extra: str) -> list[str]:
         "run",
         "--config",
         str(EXAMPLE),
-        "--read-token-file",
-        str(ns.token_file),
         "--state-file",
         str(ns.state_file),
         "--skill-cache",
@@ -126,6 +124,30 @@ def test_dry_run_prints_reviews_and_writes_nothing(fakes: SimpleNamespace, capsy
     assert not fakes.state_file.exists()
 
 
+def test_dry_run_rejects_a_malformed_review(fakes: SimpleNamespace, capsys: pytest.CaptureFixture[str]) -> None:
+    fakes.listing.return_value = [PULLS[0]]
+    fakes.review_overrides.update({1: {"event": "REQUEST_CHANGES"}})
+    assert main(_argv(fakes)) == EXIT_FAILED
+    assert not capsys.readouterr().out
+
+
+def test_missing_config_is_reported_without_a_traceback(
+    fakes: SimpleNamespace, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = _argv(fakes)
+    argv[argv.index("--config") + 1] = str(tmp_path / "absent.yaml")
+    assert main(argv) == EXIT_USAGE
+    assert "configuration" in capsys.readouterr().err
+
+
+def test_skill_checkout_failure_is_reported_without_a_traceback(
+    fakes: SimpleNamespace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fakes.checkout.side_effect = SkillCheckoutError("clone failed")
+    assert main(_argv(fakes)) == EXIT_USAGE
+    assert "clone failed" in capsys.readouterr().err
+
+
 def test_post_records_each_posted_review(fakes: SimpleNamespace, mocker: MockerFixture) -> None:
     _with_write_token(mocker)
     assert main(_argv(fakes, "--post")) == EXIT_OK
@@ -141,11 +163,24 @@ def test_post_without_write_token_fails_before_listing(fakes: SimpleNamespace, m
     fakes.listing.assert_not_called()
 
 
-def test_dry_run_removes_write_token_so_agent_cannot_inherit_it(fakes: SimpleNamespace, mocker: MockerFixture) -> None:
+def test_dry_run_removes_both_tokens_so_agent_cannot_inherit_them(
+    fakes: SimpleNamespace, mocker: MockerFixture
+) -> None:
     _with_write_token(mocker)
     assert main(_argv(fakes)) == EXIT_OK
     assert "REVIEW_ASSISTANT_GH_TOKEN" not in os.environ
+    assert "REVIEW_ASSISTANT_GH_READ_TOKEN" not in os.environ
+    assert fakes.listing.call_args.args[0] == READ_TOKEN
     fakes.post_review.assert_not_called()
+
+
+def test_missing_read_token_fails_before_skill_checkout_and_listing(
+    fakes: SimpleNamespace, mocker: MockerFixture
+) -> None:
+    mocker.patch.dict(os.environ, {}, clear=True)
+    assert main(_argv(fakes)) == EXIT_USAGE
+    fakes.checkout.assert_not_called()
+    fakes.listing.assert_not_called()
 
 
 def test_reviewed_head_is_skipped(fakes: SimpleNamespace) -> None:

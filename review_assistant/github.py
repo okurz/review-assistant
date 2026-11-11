@@ -4,7 +4,6 @@
 
 from collections.abc import Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 import requests
@@ -16,6 +15,8 @@ API = "https://api.github.com"
 JSON_ACCEPT = "application/vnd.github+json"
 DIFF_ACCEPT = "application/vnd.github.diff"
 TIMEOUT_SECONDS = 60
+GH_READ_ENV = "REVIEW_ASSISTANT_GH_READ_TOKEN"
+GH_WRITE_ENV = "REVIEW_ASSISTANT_GH_TOKEN"
 
 
 class GitHubError(RuntimeError):
@@ -66,22 +67,18 @@ class ReviewDraft(BaseModel):
     comments: list[InlineComment] = Field(default_factory=list)
 
 
-def read_token_file(path: Path) -> str:
-    """Return the read-only token stored in path."""
-    return _non_empty(path.read_text(encoding="utf-8"), str(path))
+def take_read_token(environ: MutableMapping[str, str]) -> str:
+    """Return the read-only token and remove it from environ, so no child process inherits it."""
+    token = environ.pop(GH_READ_ENV, "").strip()
+    if not token:
+        msg = f"{GH_READ_ENV} is not set"
+        raise GitHubError(msg)
+    return token
 
 
 def take_write_token(environ: MutableMapping[str, str]) -> str:
     """Return the write token and remove it from environ, so no child process inherits it."""
-    return environ.pop("REVIEW_ASSISTANT_GH_TOKEN", "").strip()
-
-
-def _non_empty(raw: str, source: str) -> str:
-    token = raw.strip()
-    if not token:
-        msg = f"no token in {source}"
-        raise GitHubError(msg)
-    return token
+    return environ.pop(GH_WRITE_ENV, "").strip()
 
 
 def _session(token: str) -> requests.Session:

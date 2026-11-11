@@ -11,6 +11,7 @@ from review_assistant.config import ReviewerConfig
 
 PLAYBOOK = "openqa-pr-review"
 LINT_SCRIPT = Path("scripts") / "review-lint.py"
+GIT = ("git", "-c", "core.hooksPath=/dev/null")
 
 type CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
@@ -80,13 +81,13 @@ def checkout_pr(clone: Path, pr: PullRequest, scratch: Scratch, runner: CommandR
     """Create a detached read-only worktree of the PR head, failing unless it is exactly head_sha."""
     refname = f"refs/review-assistant/pr-{pr.number}"
     _check(
-        runner(["git", "-C", str(clone), "fetch", "--quiet", "origin", f"+refs/pull/{pr.number}/head:{refname}"]),
+        runner([*GIT, "-C", str(clone), "fetch", "--quiet", "origin", f"+refs/pull/{pr.number}/head:{refname}"]),
         "git fetch",
     )
     _check(
-        runner(["git", "-C", str(clone), "worktree", "add", "--detach", str(scratch.worktree), refname]), "git worktree"
+        runner([*GIT, "-C", str(clone), "worktree", "add", "--detach", str(scratch.worktree), refname]), "git worktree"
     )
-    head = runner(["git", "-C", str(scratch.worktree), "rev-parse", "HEAD"])
+    head = runner([*GIT, "-C", str(scratch.worktree), "rev-parse", "HEAD"])
     _check(head, "git rev-parse")
     if head.stdout.strip() != pr.head_sha:
         msg = f"PR #{pr.number} moved: checked out {head.stdout.strip()}, expected {pr.head_sha}"
@@ -104,6 +105,8 @@ def _prompt(pr: PullRequest, skill_root: Path, scratch: Scratch) -> str:
 
 def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path) -> list[str]:
     return [
+        "env",
+        f"HERMES_WRITE_SAFE_ROOT={directory}",
         "hermes",
         "-z",
         prompt,

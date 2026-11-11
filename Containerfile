@@ -9,6 +9,13 @@ RUN git clone --no-checkout https://github.com/NousResearch/hermes-agent.git /op
     && git -C /opt/hermes-agent checkout --detach d923a5eb487a17c0a68801bba9ef0f56c81040a8 \
     && cd /opt/hermes-agent && uv sync --frozen --no-dev --extra vertex --python /usr/bin/python3.14
 
+# The skill is baked in at the pin of config/reviewer.example.yaml (kept equal by tests/test_container.py), so the
+# read-only root filesystem keeps the agent from changing the playbook or review-lint.py the CLI runs later.
+ARG SKILL_SHA=a6d255abcbce67a380f6716c94e861869ed64882
+RUN git clone --quiet https://github.com/os-autoinst/openQA-skill.git /opt/skills/${SKILL_SHA} \
+    && git -C /opt/skills/${SKILL_SHA} checkout --quiet --detach ${SKILL_SHA} \
+    && git config --system --add safe.directory /opt/skills/${SKILL_SHA}
+
 # Only package sources are copied: credentials live outside the repository and must not enter the image.
 WORKDIR /opt/review-assistant
 COPY pyproject.toml Readme.md ./

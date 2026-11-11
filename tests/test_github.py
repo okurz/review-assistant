@@ -3,7 +3,6 @@
 """Tests for the GitHub client, against recorded responses; no network and no real token."""
 
 import json
-from pathlib import Path
 
 import pydantic
 import pytest
@@ -19,7 +18,7 @@ from review_assistant.github import (
     list_open_pulls,
     poll_open_pulls,
     post_review,
-    read_token_file,
+    take_read_token,
     take_write_token,
 )
 
@@ -50,18 +49,23 @@ REVIEW = {
         pytest.param("read-token-placeholder", id="bare"),
     ],
 )
-def test_read_token_file_is_stripped(tmp_path: Path, raw: str) -> None:
-    token_file = tmp_path / "token"
-    token_file.write_text(raw, encoding="utf-8")
-    assert read_token_file(token_file) == READ_TOKEN
+def test_read_token_is_stripped_and_taken_out_of_environment(raw: str) -> None:
+    environ = {"REVIEW_ASSISTANT_GH_READ_TOKEN": raw, "PATH": "/usr/bin"}
+    assert take_read_token(environ) == READ_TOKEN
+    assert environ == {"PATH": "/usr/bin"}
 
 
-@pytest.mark.parametrize("raw", [pytest.param("", id="empty"), pytest.param(" \n", id="blank")])
-def test_empty_token_file_is_rejected(tmp_path: Path, raw: str) -> None:
-    token_file = tmp_path / "token"
-    token_file.write_text(raw, encoding="utf-8")
-    with pytest.raises(GitHubError, match="no token in"):
-        read_token_file(token_file)
+@pytest.mark.parametrize(
+    "environ",
+    [
+        pytest.param({}, id="unset"),
+        pytest.param({"REVIEW_ASSISTANT_GH_READ_TOKEN": " \n"}, id="blank"),
+    ],
+)
+def test_missing_read_token_is_rejected_and_environment_stays_clean(environ: dict[str, str]) -> None:
+    with pytest.raises(GitHubError, match="REVIEW_ASSISTANT_GH_READ_TOKEN is not set"):
+        take_read_token(environ)
+    assert "REVIEW_ASSISTANT_GH_READ_TOKEN" not in environ
 
 
 def test_write_token_is_taken_out_of_environment() -> None:

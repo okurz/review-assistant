@@ -18,9 +18,14 @@ def _git(*args: str, cwd: Path | None = None) -> str:
 
 
 def checkout_skill(skill: SkillConfig, cache_root: Path) -> Path:
-    """Clone or refresh the skill under cache_root at the pinned commit and return its path."""
+    """Return the skill under cache_root at the pinned commit, cloning or refreshing it only when not already there.
+
+    A checkout already at the pin is used as is, so the copy baked into the read-only image needs no write.
+    """
     target = cache_root / skill.sha
     if (target / ".git").is_dir():
+        if _git("rev-parse", "HEAD", cwd=target).startswith(skill.sha):
+            return target
         _git("fetch", "--quiet", "origin", cwd=target)
     else:
         _git("clone", "--quiet", skill.repo, str(target))

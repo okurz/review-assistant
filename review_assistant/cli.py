@@ -26,7 +26,7 @@ from review_assistant.github import (
     list_open_pulls,
     poll_open_pulls,
     post_review,
-    read_token_file,
+    take_read_token,
     take_write_token,
 )
 from review_assistant.hardening import HardeningError, make_non_dumpable
@@ -62,7 +62,6 @@ class _Session:
 def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--post", action="store_true", help="post the reviews; dry-run prints them instead")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="reviewer configuration file")
-    parser.add_argument("--read-token-file", type=Path, required=True, help="file holding the read-only GitHub token")
     parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE, help="local record of posted reviews")
     parser.add_argument("--skill-cache", type=Path, default=DEFAULT_SKILL_CACHE, help="directory for the pinned skill")
     parser.add_argument("--clone", type=Path, required=True, help="openQA clone whose fetches give the PR heads")
@@ -122,8 +121,8 @@ def _post_token(*, post: bool) -> str | None:
 @contextmanager
 def _session(args: argparse.Namespace, config: ReviewerConfig) -> Iterator[_Session]:
     post_token = _post_token(post=args.post)
+    read_token = take_read_token(os.environ)
     skill_root = checkout_skill(config.skill, args.skill_cache) / SKILL_SUBDIR
-    read_token = read_token_file(args.read_token_file)
     with tempfile.TemporaryDirectory(prefix="review-assistant-") as scratch_root:
         yield _Session(
             config=config,

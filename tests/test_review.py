@@ -18,6 +18,7 @@ SKILL_ROOT = Path("/cache/skill/skills/openqa")
 CLONE = Path("/cache/openQA")
 NUMBER = 8079
 HEAD = "a6d255abcbce67a380f6716c94e861869ed64882"
+HOOKLESS_GIT = ["git", "-c", "core.hooksPath=/dev/null"]
 PR = PullRequest(
     repo="os-autoinst/openQA",
     number=NUMBER,
@@ -50,7 +51,7 @@ class _FakeRunner:
 
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(argv))
-        if argv[0] == "hermes":
+        if argv[0] == "env":
             if self.write_review and self.hermes_rc == 0:
                 (Path(argv[argv.index("--in") + 1]) / f"review-{NUMBER}.json").write_text("{}", encoding="utf-8")
             return subprocess.CompletedProcess(argv, self.hermes_rc, stdout="", stderr="hermes failed")
@@ -61,7 +62,7 @@ class _FakeRunner:
         return subprocess.CompletedProcess(argv, self.git_rc, stdout="", stderr="git failed")
 
     def hermes_argv(self) -> list[str]:
-        return next(call for call in self.calls if call[0] == "hermes")
+        return next(call for call in self.calls if call[0] == "env")
 
 
 def _review(tmp_path: Path, runner: _FakeRunner) -> Path:
@@ -73,7 +74,7 @@ def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path)
     _review(tmp_path, runner)
     worktree = tmp_path / f"pr-{NUMBER}" / "worktree"
     assert runner.calls[0] == [
-        "git",
+        *HOOKLESS_GIT,
         "-C",
         str(CLONE),
         "fetch",
@@ -82,7 +83,7 @@ def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path)
         f"+refs/pull/{NUMBER}/head:refs/review-assistant/pr-{NUMBER}",
     ]
     assert runner.calls[1] == [
-        "git",
+        *HOOKLESS_GIT,
         "-C",
         str(CLONE),
         "worktree",
@@ -91,6 +92,7 @@ def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path)
         str(worktree),
         f"refs/review-assistant/pr-{NUMBER}",
     ]
+    assert runner.calls[2] == [*HOOKLESS_GIT, "-C", str(worktree), "rev-parse", "HEAD"]
 
 
 def test_moved_pr_head_is_rejected_before_review(tmp_path: Path) -> None:
@@ -102,15 +104,15 @@ def test_git_failure_is_rejected_before_review(tmp_path: Path) -> None:
     runner = _FakeRunner(git_rc=128)
     with pytest.raises(ReviewError, match="git fetch exited 128"):
         _review(tmp_path, runner)
-    assert all(call[0] != "hermes" for call in runner.calls)
+    assert all("hermes" not in call for call in runner.calls)
 
 
 def test_hermes_gets_only_provider_model_scratch_and_toolsets(tmp_path: Path) -> None:
     runner = _FakeRunner()
     _review(tmp_path, runner)
     argv = runner.hermes_argv()
-    assert argv[0:2] == ["hermes", "-z"]
-    assert argv[3:] == [
+    assert argv[0:4] == ["env", f"HERMES_WRITE_SAFE_ROOT={tmp_path / f'pr-{NUMBER}'}", "hermes", "-z"]
+    assert argv[5:] == [
         "--provider",
         "google-vertex",
         "-m",
@@ -134,13 +136,13 @@ def test_hermes_gets_only_provider_model_scratch_and_toolsets(tmp_path: Path) ->
 def test_prompt_names_playbook_and_paths(tmp_path: Path, expected: str) -> None:
     runner = _FakeRunner()
     _review(tmp_path, runner)
-    assert expected in runner.hermes_argv()[2]
+    assert expected in runner.hermes_argv()[4]
 
 
 def test_prompt_does_not_ask_the_agent_to_run_commands(tmp_path: Path) -> None:
     runner = _FakeRunner()
     _review(tmp_path, runner)
-    prompt = runner.hermes_argv()[2]
+    prompt = runner.hermes_argv()[4]
     assert "review-lint" not in prompt
     assert "run " not in prompt
 

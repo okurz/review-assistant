@@ -2,15 +2,20 @@
 # SPDX-License-Identifier: MIT
 """Tests for the podman argv of one review pass: hardening, mount modes and absence of credential values."""
 
+import dataclasses
 import subprocess  # noqa: S404 - builds CompletedProcess fixtures only
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+import yaml
 from pytest_mock import MockerFixture
 
+from review_assistant.config import load_config
 from review_assistant.container import IMAGE, HostPaths, build_run_argv, default_host_paths, main
 
 REPO = Path(__file__).resolve().parents[1]
+READ_TOKEN = "read-token-placeholder"
 
 
 def _paths(tmp_path: Path) -> HostPaths:
@@ -21,7 +26,6 @@ def _paths(tmp_path: Path) -> HostPaths:
         config_file=tmp_path / "reviewer.yaml",
         hermes_config_file=tmp_path / "config.yaml",
         state_file=tmp_path / "state.json",
-        skill_cache=tmp_path / "skills",
         clone=tmp_path / "openQA",
     )
 
@@ -51,11 +55,9 @@ def test_run_is_hardened(tmp_path: Path, flag: str) -> None:
     ("container_path", "mode"),
     [
         pytest.param("/run/secrets/gcloud/application_default_credentials.json", "ro", id="adc-read-only"),
-        pytest.param("/run/secrets/gh-read-token", "ro", id="read-token-read-only"),
         pytest.param("/config/reviewer.yaml", "ro", id="config-read-only"),
         pytest.param("/hermes/config.yaml", "ro", id="hermes-config-read-only"),
         pytest.param("/state/state.json", "rw", id="state-writable"),
-        pytest.param("/cache/skills", "rw", id="skill-cache-writable"),
         pytest.param("/cache/openQA", "rw", id="clone-writable"),
     ],
 )
@@ -68,6 +70,23 @@ def test_adc_is_found_through_gcloud_config_not_as_service_account_key(tmp_path:
     envs = [argv[index + 1] for index, arg in enumerate(argv) if arg == "-e"]
     assert "CLOUDSDK_CONFIG=/run/secrets/gcloud" in envs
     assert not any(env.startswith("GOOGLE_APPLICATION_CREDENTIALS=") for env in envs)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/run/secrets/gh-read-token", id="read-token-not-mounted"),
+        pytest.param("/opt/skills", id="baked-skill-not-shadowed"),
+    ],
+)
+def test_path_is_not_mounted(tmp_path: Path, path: str) -> None:
+    assert path not in _mounts(build_run_argv(_paths(tmp_path), []))
+
+
+def test_read_token_is_passed_by_name_only(tmp_path: Path) -> None:
+    argv = build_run_argv(_paths(tmp_path), [])
+    assert argv[argv.index("REVIEW_ASSISTANT_GH_READ_TOKEN") - 1] == "-e"
+    assert not any("REVIEW_ASSISTANT_GH_READ_TOKEN=" in arg for arg in argv)
 
 
 def test_write_token_is_passed_only_as_env_file_path(tmp_path: Path) -> None:
@@ -84,12 +103,10 @@ def test_review_arguments_follow_image(tmp_path: Path) -> None:
         "run",
         "--config",
         "/config/reviewer.yaml",
-        "--read-token-file",
-        "/run/secrets/gh-read-token",
         "--state-file",
         "/state/state.json",
         "--skill-cache",
-        "/cache/skills",
+        "/opt/skills",
         "--clone",
         "/cache/openQA",
         "--post",
@@ -110,15 +127,36 @@ def test_secrets_are_outside_the_repository(field: str) -> None:
     assert not getattr(default_host_paths(REPO), field).is_relative_to(REPO)
 
 
-def test_main_returns_podman_exit_code_and_passes_review_flags(mocker: MockerFixture) -> None:
-    run = mocker.patch("review_assistant.container.subprocess.run", return_value=subprocess.CompletedProcess([], 4))
+def test_image_bakes_the_skill_at_the_pin_of_the_example_config() -> None:
+    containerfile = (REPO / "Containerfile").read_text(encoding="utf-8")
+    pin = load_config(REPO / "config" / "reviewer.example.yaml").skill.sha
+    assert f"ARG SKILL_SHA={pin}\n" in containerfile
+    configmap = yaml.safe_load((REPO / "deploy/kubernetes/base/configmap.yaml").read_text(encoding="utf-8"))
+    assert yaml.safe_load(configmap["data"]["reviewer.yaml"])["skill"]["sha"] == pin
+
+
+@pytest.fixture
+def podman(mocker: MockerFixture, tmp_path: Path) -> MagicMock:
+    token_file = tmp_path / "read-token"
+    token_file.write_text(f"{READ_TOKEN}\n", encoding="utf-8")
+    paths = dataclasses.replace(_paths(tmp_path), read_token_file=token_file)
+    mocker.patch("review_assistant.container.default_host_paths", return_value=paths)
+    return mocker.patch("review_assistant.container.subprocess.run", return_value=subprocess.CompletedProcess([], 4))
+
+
+def test_main_returns_podman_exit_code_and_passes_review_flags(podman: MagicMock) -> None:
     assert main(["--post", "--limit", "2"]) == 4
-    argv = run.call_args.args[0]
+    argv = podman.call_args.args[0]
     assert argv[0:2] == ["podman", "run"]
     assert argv[-3:] == ["--post", "--limit", "2"]
 
 
-def test_main_without_post_runs_a_dry_run(mocker: MockerFixture) -> None:
-    run = mocker.patch("review_assistant.container.subprocess.run", return_value=subprocess.CompletedProcess([], 0))
-    assert main([]) == 0
-    assert "--post" not in run.call_args.args[0]
+def test_main_without_post_runs_a_dry_run(podman: MagicMock) -> None:
+    main([])
+    assert "--post" not in podman.call_args.args[0]
+
+
+def test_main_hands_read_token_to_podman_through_its_environment_only(podman: MagicMock) -> None:
+    main([])
+    assert podman.call_args.kwargs["env"]["REVIEW_ASSISTANT_GH_READ_TOKEN"] == READ_TOKEN
+    assert not any(READ_TOKEN in arg for arg in podman.call_args.args[0])

@@ -39,11 +39,25 @@ def test_fresh_checkout_clones_then_detaches_pinned_sha(mocker: MockerFixture, t
     ]
 
 
-def test_existing_checkout_is_fetched_instead_of_cloned(mocker: MockerFixture, tmp_path: Path) -> None:
+def test_existing_checkout_at_pin_is_used_without_fetch_or_write(mocker: MockerFixture, tmp_path: Path) -> None:
     (tmp_path / SHA / ".git").mkdir(parents=True)
     run = _mock_git(mocker, head=SHA)
+    assert checkout_skill(SKILL, tmp_path) == tmp_path / SHA
+    assert _argv(run) == [["git", "rev-parse", "HEAD"]]
+
+
+def test_existing_checkout_elsewhere_is_fetched_instead_of_cloned(mocker: MockerFixture, tmp_path: Path) -> None:
+    (tmp_path / SHA / ".git").mkdir(parents=True)
+    run = mocker.patch(
+        "review_assistant.skill.subprocess.run",
+        side_effect=[
+            subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{'0' * 40}\n"),
+            *[subprocess.CompletedProcess(args=[], returncode=0, stdout=f"{SHA}\n")] * 3,
+        ],
+    )
     checkout_skill(SKILL, tmp_path)
     assert _argv(run) == [
+        ["git", "rev-parse", "HEAD"],
         ["git", "fetch", "--quiet", "origin"],
         ["git", "checkout", "--quiet", "--detach", SHA],
         ["git", "rev-parse", "HEAD"],

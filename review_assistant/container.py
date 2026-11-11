@@ -3,17 +3,19 @@
 """Host-side builder of the rootless podman run for one review pass; it holds paths, never credential values."""
 
 import argparse
+import os
 import subprocess  # noqa: S404 - podman is an external interface, argv only, no shell
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from review_assistant.github import GH_READ_ENV
+
 IMAGE = "review-assistant:dev"
 CONTAINER_CONFIG = "/config/reviewer.yaml"
 CONTAINER_STATE = "/state/state.json"
-CONTAINER_SKILL_CACHE = "/cache/skills"
+CONTAINER_SKILL_CACHE = "/opt/skills"
 CONTAINER_CLONE = "/cache/openQA"
-CONTAINER_GH_READ_PATH = "/run/secrets/gh-read-token"
 CONTAINER_GCLOUD_DIR = "/run/secrets/gcloud"
 CONTAINER_ADC = f"{CONTAINER_GCLOUD_DIR}/application_default_credentials.json"
 CONTAINER_HERMES_HOME = "/hermes"
@@ -22,7 +24,11 @@ CONTAINER_HERMES_CONFIG = f"{CONTAINER_HERMES_HOME}/config.yaml"
 
 @dataclass(frozen=True)
 class HostPaths:
-    """Host paths mounted into the container; the secrets among them stay outside the repository."""
+    """Host paths for one container run; the secrets among them stay outside the repository.
+
+    The read token file is read on the host and passed as an environment variable, never mounted, so the
+    agent finds no copy of it once the CLI has taken it out of its environment.
+    """
 
     adc_file: Path
     read_token_file: Path
@@ -30,7 +36,6 @@ class HostPaths:
     config_file: Path
     hermes_config_file: Path
     state_file: Path
-    skill_cache: Path
     clone: Path
     image: str = IMAGE
 
@@ -50,6 +55,8 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "--env-file",
         str(paths.env_file),
         "-e",
+        GH_READ_ENV,
+        "-e",
         "HOME=/tmp",
         "-e",
         f"HERMES_HOME={CONTAINER_HERMES_HOME}",
@@ -58,23 +65,17 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str]) -> list[str]:
         "-v",
         f"{paths.adc_file}:{CONTAINER_ADC}:ro",
         "-v",
-        f"{paths.read_token_file}:{CONTAINER_GH_READ_PATH}:ro",
-        "-v",
         f"{paths.config_file}:{CONTAINER_CONFIG}:ro",
         "-v",
         f"{paths.hermes_config_file}:{CONTAINER_HERMES_CONFIG}:ro",
         "-v",
         f"{paths.state_file}:{CONTAINER_STATE}:rw",
         "-v",
-        f"{paths.skill_cache}:{CONTAINER_SKILL_CACHE}:rw",
-        "-v",
         f"{paths.clone}:{CONTAINER_CLONE}:rw",
         paths.image,
         "run",
         "--config",
         CONTAINER_CONFIG,
-        "--read-token-file",
-        CONTAINER_GH_READ_PATH,
         "--state-file",
         CONTAINER_STATE,
         "--skill-cache",
@@ -96,7 +97,6 @@ def default_host_paths(repo: Path) -> HostPaths:
         config_file=repo / "config" / "reviewer.yaml",
         hermes_config_file=repo / "deploy" / "hermes" / "config.yaml",
         state_file=home / ".local" / "state" / "review-assistant" / "state.json",
-        skill_cache=home / ".cache" / "review-assistant" / "skills",
         clone=home / ".cache" / "review-assistant" / "openQA",
     )
 
@@ -110,6 +110,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     review_args = ["--post"] if args.post else []
     if args.limit is not None:
         review_args += ["--limit", str(args.limit)]
-    repo = Path(__file__).resolve().parents[1]
-    argv_podman = build_run_argv(default_host_paths(repo), review_args)
-    return subprocess.run(argv_podman, check=False).returncode  # noqa: S603 - argv built here, no shell
+    paths = default_host_paths(Path(__file__).resolve().parents[1])
+    env = os.environ | {GH_READ_ENV: paths.read_token_file.read_text(encoding="utf-8").strip()}
+    return subprocess.run(build_run_argv(paths, review_args), check=False, env=env).returncode  # noqa: S603 - argv built here, no shell

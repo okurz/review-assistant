@@ -37,12 +37,10 @@ spec:
             - "1"
             - --config
             - /config/reviewer.yaml
-            - --read-token-file
-            - /etc/review-assistant/secrets/gh-read-token
             - --state-file
             - /var/lib/review-assistant/state.json
             - --skill-cache
-            - /scratch/skills
+            - /opt/skills
             - --clone
             - /scratch/openQA
           env:
@@ -59,6 +57,11 @@ spec:
                 secretKeyRef:
                   name: review-assistant-secrets
                   key: gh-write-token
+            - name: REVIEW_ASSISTANT_GH_READ_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: review-assistant-secrets
+                  key: gh-read-token
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -108,8 +111,6 @@ spec:
             secretName: review-assistant-secrets
             defaultMode: 0440
             items:
-              - key: gh-read-token
-                path: gh-read-token
               - key: vertex-adc.json
                 path: gcloud/application_default_credentials.json
         - name: state
