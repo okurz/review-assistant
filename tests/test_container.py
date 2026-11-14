@@ -140,6 +140,13 @@ def podman(mocker: MockerFixture, tmp_path: Path) -> MagicMock:
     return mocker.patch("review_assistant.container.subprocess.run", return_value=subprocess.CompletedProcess([], 4))
 
 
+@pytest.mark.usefixtures("podman")
+def test_main_creates_the_state_dir_before_podman_runs(tmp_path: Path) -> None:
+    assert not (tmp_path / "state").exists()
+    main([])
+    assert (tmp_path / "state").is_dir()
+
+
 def test_main_returns_podman_exit_code_and_passes_review_flags(podman: MagicMock) -> None:
     assert main(["--post", "--limit", "2"]) == 4
     argv = podman.call_args.args[0]

@@ -105,5 +105,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     review_args = (["--post"] if args.post else []) + (["--limit", str(args.limit)] if args.limit is not None else [])
     command, review_args = ("check-isolation", []) if args.check_isolation else ("run", review_args)
     paths = default_host_paths(Path(__file__).resolve().parents[1])
+    paths.state_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ | {GH_READ_ENV: paths.read_token_file.read_text(encoding="utf-8").strip()}
     return subprocess.run(build_run_argv(paths, review_args, command), check=False, env=env).returncode  # noqa: S603 - argv built here, no shell
