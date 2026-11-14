@@ -41,8 +41,6 @@ spec:
             - /var/lib/review-assistant/state.json
             - --skill-cache
             - /opt/skills
-            - --clone
-            - /scratch/openQA
           env:
             - name: HOME
               value: /tmp

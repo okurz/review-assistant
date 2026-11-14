@@ -37,8 +37,6 @@ spec:
             - /var/lib/review-assistant/state.json
             - --skill-cache
             - /opt/skills
-            - --clone
-            - /scratch/openQA
             - --heartbeat-file
             - /tmp/heartbeat
           env:

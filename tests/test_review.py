@@ -10,7 +10,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from review_assistant.config import load_config
-from review_assistant.review import PullRequest, ReviewError, Workspace, review_pull_request, run_command
+from review_assistant.review import PullRequest, ReviewError, Workspace, ensure_clone, review_pull_request, run_command
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
 CONFIG = load_config(EXAMPLE)
@@ -58,6 +58,8 @@ class _FakeRunner:
 
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(argv))
+        if "clone" in argv:
+            (Path(argv[-1]) / ".git").mkdir(parents=True, exist_ok=True)
         if argv[0] == "env":
             if self.write_review and self.hermes_rc == 0:
                 review = Path(argv[argv.index("--in") + 1]) / f"review-{NUMBER}.json"
@@ -77,6 +79,29 @@ class _FakeRunner:
 
 def _review(tmp_path: Path, runner: _FakeRunner) -> Path:
     return review_pull_request(CONFIG, PR, Workspace(SKILL_ROOT, tmp_path, CLONE, (SECRET, "")), runner)
+
+
+def test_missing_clone_is_cloned_shallow_once(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+    ensure_clone("https://github.com/os-autoinst/openQA.git", tmp_path / "openQA", runner)
+    assert runner.calls == [
+        [
+            *HOOKLESS_GIT,
+            "clone",
+            "--quiet",
+            "--depth",
+            "1",
+            "https://github.com/os-autoinst/openQA.git",
+            str(tmp_path / "openQA"),
+        ]
+    ]
+    ensure_clone("https://github.com/os-autoinst/openQA.git", tmp_path / "openQA", runner)
+    assert len(runner.calls) == 1
+
+
+def test_failed_clone_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ReviewError, match="git clone exited 128"):
+        ensure_clone("url", tmp_path / "openQA", _FakeRunner(git_rc=128))
 
 
 def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path) -> None:

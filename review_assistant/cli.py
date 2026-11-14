@@ -32,11 +32,12 @@ from review_assistant.github import (
     take_write_token,
 )
 from review_assistant.hardening import HardeningError, make_non_dumpable
-from review_assistant.review import ReviewError, Workspace, agent_env, review_pull_request
+from review_assistant.review import ReviewError, Workspace, agent_env, ensure_clone, review_pull_request
 from review_assistant.skill import SkillCheckoutError, checkout_skill
 from review_assistant.state import ReviewRecord, State, is_reviewed, load_state, save_state, state_key
 
 REPO = "os-autoinst/openQA"
+REPO_URL = f"https://github.com/{REPO}.git"
 SKILL_SUBDIR = Path("skills") / "openqa"
 DEFAULT_CONFIG = Path("config/reviewer.yaml")
 DEFAULT_STATE = Path.home() / ".local/state/review-assistant/state.json"
@@ -67,7 +68,7 @@ def _add_shared_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="reviewer configuration file")
     parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE, help="local record of posted reviews")
     parser.add_argument("--skill-cache", type=Path, default=DEFAULT_SKILL_CACHE, help="directory for the pinned skill")
-    parser.add_argument("--clone", type=Path, required=True, help="openQA clone whose fetches give the PR heads")
+    parser.add_argument("--clone", type=Path, help="openQA clone to reuse; cloned into the scratch root if absent")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -134,13 +135,15 @@ def _session(args: argparse.Namespace, config: ReviewerConfig) -> Iterator[_Sess
     read_token = take_read_token(os.environ)
     skill_checkout = checkout_skill(config.skill, args.skill_cache)
     with tempfile.TemporaryDirectory(prefix="review-assistant-") as scratch_root:
+        clone = args.clone if args.clone is not None else Path(scratch_root) / "openQA"
+        ensure_clone(REPO_URL, clone)
         yield _Session(
             config=config,
             read_token=read_token,
             post_token=post_token,
             skill_root=skill_checkout / SKILL_SUBDIR,
             skill_checkout=skill_checkout,
-            clone=args.clone,
+            clone=clone,
             scratch_root=Path(scratch_root),
             state_file=args.state_file,
             state=load_state(args.state_file),

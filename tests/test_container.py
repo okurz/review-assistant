@@ -26,7 +26,6 @@ def _paths(tmp_path: Path) -> HostPaths:
         config_file=tmp_path / "reviewer.yaml",
         hermes_config_file=tmp_path / "config.yaml",
         state_dir=tmp_path / "state",
-        clone=tmp_path / "openQA",
     )
 
 
@@ -58,7 +57,6 @@ def test_run_is_hardened(tmp_path: Path, flag: str) -> None:
         pytest.param("/config/reviewer.yaml", "ro", id="config-read-only"),
         pytest.param("/hermes/config.yaml", "ro", id="hermes-config-read-only"),
         pytest.param("/state", "rw", id="state-directory-writable-for-atomic-replace"),
-        pytest.param("/cache/openQA", "rw", id="clone-writable"),
     ],
 )
 def test_mount_modes(tmp_path: Path, container_path: str, mode: str) -> None:
@@ -107,8 +105,6 @@ def test_review_arguments_follow_image(tmp_path: Path) -> None:
         "/state/state.json",
         "--skill-cache",
         "/opt/skills",
-        "--clone",
-        "/cache/openQA",
         "--post",
         "--limit",
         "3",

@@ -23,6 +23,7 @@ from review_assistant.skill import SkillCheckoutError
 from review_assistant.state import ReviewRecord, load_state, save_state, state_key
 
 REPO = "os-autoinst/openQA"
+REPO_URL = "https://github.com/os-autoinst/openQA.git"
 EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
 READ_TOKEN = "read-token-placeholder"
 WRITE_TOKEN = "write-token-placeholder"
@@ -90,6 +91,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
     ns.fetch = mocker.patch("review_assistant.cli.fetch_pull_request", side_effect=fetch)
     ns.review = mocker.patch("review_assistant.cli.review_pull_request", side_effect=draft)
     ns.post_review = mocker.patch("review_assistant.cli.post_review", side_effect=post)
+    ns.ensure_clone = mocker.patch("review_assistant.cli.ensure_clone")
     return ns
 
 
@@ -301,14 +303,17 @@ def test_failed_hardening_stops_before_any_listing(fakes: SimpleNamespace, mocke
     fakes.listing.assert_not_called()
 
 
-def test_clone_path_is_required(
-    fakes: SimpleNamespace, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    mocker.patch("review_assistant.cli.make_non_dumpable")
-    argv = [arg for arg in _argv(fakes) if arg != "--clone" and arg != str(fakes.clone)]
-    with pytest.raises(SystemExit):
-        main(argv)
-    assert "--clone" in capsys.readouterr().err
+def test_given_clone_is_reused_and_not_cloned(fakes: SimpleNamespace) -> None:
+    main(_argv(fakes))
+    fakes.ensure_clone.assert_called_once_with(REPO_URL, fakes.clone)
+
+
+def test_absent_clone_is_cloned_into_the_scratch_root(fakes: SimpleNamespace) -> None:
+    argv = [arg for arg in _argv(fakes) if arg not in {"--clone", str(fakes.clone)}]
+    assert main(argv) == EXIT_OK
+    url, clone = fakes.ensure_clone.call_args.args
+    assert url == REPO_URL
+    assert clone.parent.name.startswith("review-assistant-")
 
 
 def _daemon_argv(ns: SimpleNamespace, heartbeat: Path, *extra: str) -> list[str]:

@@ -16,7 +16,6 @@ CONTAINER_CONFIG = "/config/reviewer.yaml"
 CONTAINER_STATE_DIR = "/state"
 CONTAINER_STATE = f"{CONTAINER_STATE_DIR}/state.json"
 CONTAINER_SKILL_CACHE = "/opt/skills"
-CONTAINER_CLONE = "/cache/openQA"
 CONTAINER_GCLOUD_DIR = "/run/secrets/gcloud"
 CONTAINER_ADC = f"{CONTAINER_GCLOUD_DIR}/application_default_credentials.json"
 CONTAINER_HERMES_HOME = "/hermes"
@@ -37,7 +36,6 @@ class HostPaths:
     config_file: Path
     hermes_config_file: Path
     state_dir: Path
-    clone: Path
     image: str = IMAGE
 
 
@@ -71,8 +69,6 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str], command: str = 
         f"{paths.hermes_config_file}:{CONTAINER_HERMES_CONFIG}:ro",
         "-v",
         f"{paths.state_dir}:{CONTAINER_STATE_DIR}:rw",
-        "-v",
-        f"{paths.clone}:{CONTAINER_CLONE}:rw",
         paths.image,
         command,
         "--config",
@@ -81,8 +77,6 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str], command: str = 
         CONTAINER_STATE,
         "--skill-cache",
         CONTAINER_SKILL_CACHE,
-        "--clone",
-        CONTAINER_CLONE,
         *review_args,
     ]
 
@@ -98,7 +92,6 @@ def default_host_paths(repo: Path) -> HostPaths:
         config_file=repo / "config" / "reviewer.yaml",
         hermes_config_file=repo / "deploy" / "hermes" / "config.yaml",
         state_dir=home / ".local" / "state" / "review-assistant",
-        clone=home / ".cache" / "review-assistant" / "openQA",
     )
 
 

@@ -65,6 +65,13 @@ def _check(result: subprocess.CompletedProcess[str], step: str) -> None:
         raise ReviewError(msg)
 
 
+def ensure_clone(url: str, path: Path, runner: CommandRunner = run_command) -> None:
+    """Clone url into path when path is not already a clone, so the PR heads can be fetched there."""
+    if (path / ".git").is_dir():
+        return
+    _check(runner([*GIT, "clone", "--quiet", "--depth", "1", url, str(path)]), "git clone")
+
+
 def _prepare_scratch(root: Path, pr: PullRequest) -> Scratch:
     directory = root / f"pr-{pr.number}"
     directory.mkdir(parents=True, exist_ok=True)
