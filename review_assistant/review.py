@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Checks out a pull request, runs the Hermes review agent over it, and lints the review it drafts."""
 
+import json
+import re
 import subprocess  # noqa: S404 - git, hermes and python3 are external interfaces, argv only, no shell
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -13,6 +15,37 @@ from review_assistant.secret_filter import holds_secret, redact
 PLAYBOOK = "openqa-pr-review"
 LINT_SCRIPT = Path("scripts") / "review-lint.py"
 GIT = ("git", "-c", "core.hooksPath=/dev/null")
+APPROVAL_TEXT_FINDING = "event review: an approval carries no text"
+_PUNCTUATION = re.compile(r"[^\w\s+]")
+_FILLER_PHRASES = frozenset({
+    "+1",
+    "all good",
+    "approved",
+    "done",
+    "fine",
+    "good",
+    "great",
+    "looks fine",
+    "looks fine to me",
+    "looks good",
+    "looks good thanks",
+    "looks good to me",
+    "looks great",
+    "looks ok",
+    "lgtm",
+    "lgtm thanks",
+    "nice",
+    "no concerns",
+    "no issue",
+    "no issues",
+    "no issues found",
+    "ok",
+    "okay",
+    "passed",
+    "thanks",
+    "verified",
+    "yes",
+})
 
 type CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
@@ -103,11 +136,36 @@ def checkout_pr(clone: Path, pr: PullRequest, scratch: Scratch, runner: CommandR
         raise ReviewError(msg)
 
 
+def validate_review_summary(body: str) -> None:
+    """Ensure the review body has a meaningful summary and is not empty or generic filler."""
+    stripped = body.strip()
+    if not stripped:
+        msg = "review body must not be empty: provide a 1-3 sentence summary of what was verified"
+        raise ReviewError(msg)
+    normalized = " ".join(_PUNCTUATION.sub("", stripped).lower().split())
+    if normalized in _FILLER_PHRASES:
+        msg = f"review body contains generic filler ({stripped!r}): provide a 1-3 sentence summary of what was verified"
+        raise ReviewError(msg)
+
+
+def _check_lint(result: subprocess.CompletedProcess[str], event: str) -> None:
+    if result.returncode == 0:
+        return
+    findings = [line.strip() for line in result.stdout.splitlines() if line.strip().startswith("F ")]
+    if event == "APPROVE" and findings and all(APPROVAL_TEXT_FINDING in f for f in findings):
+        return
+    detail = result.stderr.strip() or result.stdout.strip()
+    msg = f"review-lint exited {result.returncode}: {detail}"
+    raise ReviewError(msg)
+
+
 def _prompt(pr: PullRequest, skill_root: Path, scratch: Scratch) -> str:
     return (
         f"Review {pr.repo} pull request #{pr.number} with the {PLAYBOOK} playbook of the openQA skill "
         f"at {skill_root}. Inputs: diff {scratch.directory / 'diff.patch'}, PR text {scratch.directory / 'pr.md'}, "
         f"read-only PR-head checkout {scratch.worktree}. Write the review JSON to {scratch.review}. "
+        "The review body must not be empty: provide a concise 1-3 sentence summary describing what was "
+        "verified and what was unverified. Avoid generic filler like 'LGTM'. "
         "Post nothing: no review, comment, approval or label."
     )
 
@@ -141,9 +199,19 @@ def _review(config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runne
     if not scratch.review.is_file():
         msg = f"hermes wrote no review at {scratch.review}"
         raise ReviewError(msg)
-    if holds_secret(scratch.review.read_text(encoding="utf-8"), workspace.secrets):
+    raw_text = scratch.review.read_text(encoding="utf-8")
+    if holds_secret(raw_text, workspace.secrets):
         msg = f"review at {scratch.review} contains a credential"
         raise ReviewError(msg)
+    try:
+        review_data = json.loads(raw_text)
+    except json.JSONDecodeError as error:
+        msg = f"review at {scratch.review} is not valid JSON: {error}"
+        raise ReviewError(msg) from None
+    if not isinstance(review_data, dict) or not isinstance(review_data.get("body"), str):
+        msg = f"review at {scratch.review} must be a JSON object with a string 'body'"
+        raise ReviewError(msg)
+    validate_review_summary(review_data["body"])
     lint_argv = [
         "python3",
         str(workspace.skill_root / LINT_SCRIPT),
@@ -151,7 +219,7 @@ def _review(config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runne
         "--lines",
         str(pr.changed_lines),
     ]
-    _check(runner(lint_argv), "review-lint")
+    _check_lint(runner(lint_argv), str(review_data.get("event", "")))
     return scratch.review
 
 

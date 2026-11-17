@@ -14,6 +14,7 @@ from review_assistant.github import (
     API,
     DIFF_ACCEPT,
     GitHubError,
+    ReviewDraft,
     fetch_pull_request,
     list_open_pulls,
     poll_open_pulls,
@@ -186,6 +187,21 @@ def test_review_event_outside_comment_and_approve_is_rejected_before_any_request
         with pytest.raises(pydantic.ValidationError):
             post_review(WRITE_TOKEN, REPO, 8079, review)
         assert len(rsps.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+        pytest.param("LGTM", id="filler-lgtm"),
+        pytest.param("Looks good to me.", id="filler-looks-good"),
+        pytest.param("+1", id="filler-plus-one"),
+    ],
+)
+def test_review_draft_rejects_empty_and_filler_body(body: str) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        ReviewDraft.model_validate({**REVIEW, "body": body})
 
 
 def test_poll_lists_most_recently_updated_first_and_returns_validators() -> None:

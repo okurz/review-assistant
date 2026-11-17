@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for the review runner, with a fake runner in place of git, Hermes and review-lint."""
 
+import json
 import subprocess  # noqa: S404 - builds CompletedProcess fixtures only
 from collections.abc import Sequence
 from pathlib import Path
@@ -10,7 +11,15 @@ import pytest
 from pytest_mock import MockerFixture
 
 from review_assistant.config import load_config
-from review_assistant.review import PullRequest, ReviewError, Workspace, ensure_clone, review_pull_request, run_command
+from review_assistant.review import (
+    PullRequest,
+    ReviewError,
+    Workspace,
+    ensure_clone,
+    review_pull_request,
+    run_command,
+    validate_review_summary,
+)
 
 EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
 CONFIG = load_config(EXAMPLE)
@@ -31,13 +40,19 @@ PR = PullRequest(
 
 
 SECRET = "read-token-placeholder"
+DEFAULT_REVIEW = json.dumps({
+    "commit_id": HEAD,
+    "event": "APPROVE",
+    "body": "Verified the test and retry logic in Assets.pm.",
+    "comments": [],
+})
 
 
 class _FakeRunner:
     def __init__(
         self,
         *,
-        review_text: str = "{}",
+        review_text: str = DEFAULT_REVIEW,
         hermes_out: str = "",
         hermes_rc: int = 0,
         lint_rc: int = 0,
@@ -166,6 +181,8 @@ def test_hermes_gets_only_provider_model_scratch_and_toolsets(tmp_path: Path) ->
         pytest.param(str(SKILL_ROOT), id="skill-root-given"),
         pytest.param(f"review-{NUMBER}.json", id="review-path-given"),
         pytest.param("Post nothing", id="no-posting-instruction"),
+        pytest.param("review body must not be empty", id="summary-required"),
+        pytest.param("Avoid generic filler like 'LGTM'", id="no-filler-instruction"),
     ],
 )
 def test_prompt_names_playbook_and_paths(tmp_path: Path, expected: str) -> None:
@@ -260,3 +277,94 @@ def test_run_command_executes_argv_without_shell(mocker: MockerFixture) -> None:
     run = mocker.patch("review_assistant.review.subprocess.run", return_value=completed)
     assert run_command(["hermes", "-z"]) is completed
     run.assert_called_once_with(["hermes", "-z"], check=False, capture_output=True, text=True)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("Verified retry handling in Assets.pm.", id="simple-verified"),
+        pytest.param("Checked Screenshot.pm; verified filter ordering.", id="multi-clause"),
+        pytest.param("LGTM, verified the test harness and module syntax.", id="filler-with-substance"),
+    ],
+)
+def test_validate_review_summary_accepts_valid_summary(body: str) -> None:
+    validate_review_summary(body)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        pytest.param("", "review body must not be empty", id="empty"),
+        pytest.param("   \n\t  ", "review body must not be empty", id="whitespace"),
+        pytest.param("LGTM", "generic filler", id="lgtm-upper"),
+        pytest.param("lgtm!", "generic filler", id="lgtm-punct"),
+        pytest.param("Looks good to me.", "generic filler", id="looks-good-to-me"),
+        pytest.param("looks good", "generic filler", id="looks-good"),
+        pytest.param("+1", "generic filler", id="plus-one"),
+        pytest.param("Approved.", "generic filler", id="approved"),
+        pytest.param("All good!", "generic filler", id="all-good"),
+        pytest.param("done", "generic filler", id="done"),
+        pytest.param("ok", "generic filler", id="ok"),
+    ],
+)
+def test_validate_review_summary_rejects_empty_and_filler(body: str, message: str) -> None:
+    with pytest.raises(ReviewError, match=message):
+        validate_review_summary(body)
+
+
+@pytest.mark.parametrize(
+    ("review_text", "message"),
+    [
+        pytest.param("not json at all", "is not valid JSON", id="not-json"),
+        pytest.param('["not", "a", "dict"]', "must be a JSON object", id="not-dict"),
+        pytest.param(
+            json.dumps({"commit_id": HEAD, "event": "APPROVE"}),
+            "must be a JSON object with a string 'body'",
+            id="missing-body",
+        ),
+        pytest.param(
+            json.dumps({"commit_id": HEAD, "event": "APPROVE", "body": 123}),
+            "must be a JSON object with a string 'body'",
+            id="non-string-body",
+        ),
+        pytest.param(
+            json.dumps({"commit_id": HEAD, "event": "APPROVE", "body": ""}),
+            "review body must not be empty",
+            id="empty-body",
+        ),
+        pytest.param(
+            json.dumps({"commit_id": HEAD, "event": "APPROVE", "body": "LGTM"}),
+            "review body contains generic filler",
+            id="filler-body",
+        ),
+    ],
+)
+def test_review_with_invalid_body_is_rejected(tmp_path: Path, review_text: str, message: str) -> None:
+    runner = _FakeRunner(review_text=review_text)
+    with pytest.raises(ReviewError, match=message):
+        _review(tmp_path, runner)
+
+
+def test_approve_with_body_ignores_review_lint_approval_text_finding(tmp_path: Path) -> None:
+    lint_out = (
+        "budget: 42 changed lines, lib: 4 non-blocking items, 1000 chars\n"
+        "draft: APPROVE, 0 comments + body; blocking 0, nit 0, non-blocking prose 45 chars\n"
+        "findings: 1\n"
+        "  F event review: an approval carries no text; findings go in a COMMENT review\n"
+    )
+    runner = _FakeRunner(lint_rc=1, lint_out=lint_out)
+    review = _review(tmp_path, runner)
+    assert review == tmp_path / f"pr-{NUMBER}" / f"review-{NUMBER}.json"
+
+
+def test_approve_with_body_and_other_findings_fails_lint(tmp_path: Path) -> None:
+    lint_out = (
+        "budget: 42 changed lines, lib: 4 non-blocking items, 1000 chars\n"
+        "draft: APPROVE, 0 comments + body; blocking 0, nit 0, non-blocking prose 45 chars\n"
+        "findings: 2\n"
+        "  F bare-id body: '1234567' is a bare number; write each job as its full URL\n"
+        "  F event review: an approval carries no text; findings go in a COMMENT review\n"
+    )
+    runner = _FakeRunner(lint_rc=1, lint_out=lint_out)
+    with pytest.raises(ReviewError, match=r"(?s)review-lint exited 1:.*bare-id body"):
+        _review(tmp_path, runner)

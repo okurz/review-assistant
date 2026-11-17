@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from review_assistant.review import PullRequest
+from review_assistant.review import PullRequest, ReviewError, validate_review_summary
 
 API = "https://api.github.com"
 JSON_ACCEPT = "application/vnd.github+json"
@@ -63,8 +63,17 @@ class ReviewDraft(BaseModel):
 
     commit_id: str
     event: Literal["COMMENT", "APPROVE"]
-    body: str = ""
+    body: str
     comments: list[InlineComment] = Field(default_factory=list)
+
+    @field_validator("body")
+    @staticmethod
+    def _validate_body(value: str) -> str:
+        try:
+            validate_review_summary(value)
+        except ReviewError as error:
+            raise ValueError(str(error)) from None
+        return value
 
 
 def take_read_token(environ: MutableMapping[str, str]) -> str:

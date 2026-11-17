@@ -9,3 +9,4 @@ __pycache__/
 coverage.xml
 htmlcov/
 deploy/kubernetes/review-assistant-secrets.yaml
+config/reviewer.yaml
