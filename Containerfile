@@ -1,5 +1,5 @@
-# Base pinned by digest, resolved from registry.opensuse.org/opensuse/tumbleweed:latest on 2026-11-10.
-FROM registry.opensuse.org/opensuse/tumbleweed@sha256:28dc49bdc6463892bc6346d08f7972eb71b090d8752b05ae827d0d07f2e84660
+# Base pinned by digest, resolved from registry.opensuse.org/opensuse/tumbleweed:latest on 2026-11-18.
+FROM registry.opensuse.org/opensuse/tumbleweed@sha256:b088dd76bffb2e6ff88c5666f845163e9fe75330a9e57a70712d504c18f35817
 
 RUN zypper --non-interactive install --no-recommends git gh python313 python314 uv \
     && zypper clean --all
