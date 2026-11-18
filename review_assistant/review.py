@@ -4,6 +4,7 @@
 
 import json
 import re
+import shutil
 import subprocess  # noqa: S404 - git, hermes and python3 are external interfaces, argv only, no shell
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -107,6 +108,7 @@ def ensure_clone(url: str, path: Path, runner: CommandRunner = run_command) -> N
 
 def _prepare_scratch(root: Path, pr: PullRequest) -> Scratch:
     directory = root / f"pr-{pr.number}"
+    shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True, exist_ok=True)
     scratch = Scratch(
         directory=directory,
@@ -120,12 +122,23 @@ def _prepare_scratch(root: Path, pr: PullRequest) -> Scratch:
 
 
 def checkout_pr(clone: Path, pr: PullRequest, scratch: Scratch, runner: CommandRunner) -> None:
-    """Create a detached read-only worktree of the PR head, failing unless it is exactly head_sha."""
+    """Create a detached worktree of the PR head, failing unless it is exactly head_sha."""
     refname = f"refs/review-assistant/pr-{pr.number}"
     _check(
-        runner([*GIT, "-C", str(clone), "fetch", "--quiet", "origin", f"+refs/pull/{pr.number}/head:{refname}"]),
+        runner([
+            *GIT,
+            "-C",
+            str(clone),
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            "origin",
+            f"+refs/pull/{pr.number}/head:{refname}",
+        ]),
         "git fetch",
     )
+    _check(runner([*GIT, "-C", str(clone), "worktree", "prune"]), "git worktree prune")
     _check(
         runner([*GIT, "-C", str(clone), "worktree", "add", "--detach", str(scratch.worktree), refname]), "git worktree"
     )
@@ -163,7 +176,14 @@ def _prompt(pr: PullRequest, skill_root: Path, scratch: Scratch) -> str:
     return (
         f"Review {pr.repo} pull request #{pr.number} with the {PLAYBOOK} playbook of the openQA skill "
         f"at {skill_root}. Inputs: diff {scratch.directory / 'diff.patch'}, PR text {scratch.directory / 'pr.md'}, "
-        f"read-only PR-head checkout {scratch.worktree}. Write the review JSON to {scratch.review}. "
+        f"PR-head checkout {scratch.worktree}. Write the review JSON to {scratch.review}. "
+        "Use only the supplied files; the playbook's shell, gh and script steps are unavailable in this run. "
+        "Assess quality and determine the verdict event: "
+        "- Set event to 'APPROVE' if the changes are clean, verified, align with conventions, "
+        "and have no defects or open questions. "
+        "- Set event to 'COMMENT' if there are change requests, questions, or findings "
+        "(prefix inline comments with 'blocking:' or 'nit:'). "
+        "Never use 'REQUEST_CHANGES'. "
         "The review body must not be empty: provide a concise 1-3 sentence summary describing what was "
         "verified and what was unverified. Avoid generic filler like 'LGTM'. "
         "Post nothing: no review, comment, approval or label."
@@ -220,6 +240,7 @@ def _review(config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runne
         str(pr.changed_lines),
     ]
     _check_lint(runner(lint_argv), str(review_data.get("event", "")))
+    runner([*GIT, "-C", str(workspace.clone), "worktree", "remove", "--force", str(scratch.worktree)])
     return scratch.review
 
 

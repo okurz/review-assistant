@@ -110,7 +110,13 @@ def _review_one(session: _Session, summary: PullSummary) -> None:
 
 
 def _review_pulls(session: _Session, pulls: Sequence[PullSummary], limit: int) -> int:
-    todo = [pull for pull in pulls if not is_reviewed(session.state, REPO, pull.number, pull.head_sha)][:limit]
+    todo = [
+        pull
+        for pull in pulls
+        if not pull.draft
+        and pull.author != session.config.agent_name
+        and not is_reviewed(session.state, REPO, pull.number, pull.head_sha)
+    ][:limit]
     failures = 0
     for summary in todo:
         try:

@@ -129,10 +129,13 @@ def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path)
         str(CLONE),
         "fetch",
         "--quiet",
+        "--depth",
+        "1",
         "origin",
         f"+refs/pull/{NUMBER}/head:refs/review-assistant/pr-{NUMBER}",
     ]
-    assert runner.calls[1] == [
+    assert runner.calls[1] == [*HOOKLESS_GIT, "-C", str(CLONE), "worktree", "prune"]
+    assert runner.calls[2] == [
         *HOOKLESS_GIT,
         "-C",
         str(CLONE),
@@ -142,7 +145,7 @@ def test_pr_head_is_fetched_by_pull_ref_and_checked_out_detached(tmp_path: Path)
         str(worktree),
         f"refs/review-assistant/pr-{NUMBER}",
     ]
-    assert runner.calls[2] == [*HOOKLESS_GIT, "-C", str(worktree), "rev-parse", "HEAD"]
+    assert runner.calls[3] == [*HOOKLESS_GIT, "-C", str(worktree), "rev-parse", "HEAD"]
 
 
 def test_moved_pr_head_is_rejected_before_review(tmp_path: Path) -> None:
@@ -183,6 +186,10 @@ def test_hermes_gets_only_provider_model_scratch_and_toolsets(tmp_path: Path) ->
         pytest.param("Post nothing", id="no-posting-instruction"),
         pytest.param("review body must not be empty", id="summary-required"),
         pytest.param("Avoid generic filler like 'LGTM'", id="no-filler-instruction"),
+        pytest.param("Set event to 'APPROVE'", id="approve-guidance"),
+        pytest.param("Set event to 'COMMENT'", id="comment-guidance"),
+        pytest.param("Never use 'REQUEST_CHANGES'", id="no-request-changes"),
+        pytest.param("unavailable in this run", id="file-only-tools-disclosed"),
     ],
 )
 def test_prompt_names_playbook_and_paths(tmp_path: Path, expected: str) -> None:
@@ -210,13 +217,30 @@ def test_passing_review_is_linted_in_python_with_changed_lines(tmp_path: Path) -
     runner = _FakeRunner()
     review = _review(tmp_path, runner)
     assert review == tmp_path / f"pr-{NUMBER}" / f"review-{NUMBER}.json"
-    assert runner.calls[-1] == [
+    assert runner.calls[-2] == [
         "python3",
         str(SKILL_ROOT / "scripts" / "review-lint.py"),
         str(review),
         "--lines",
         "42",
     ]
+    assert runner.calls[-1] == [
+        *HOOKLESS_GIT,
+        "-C",
+        str(CLONE),
+        "worktree",
+        "remove",
+        "--force",
+        str(tmp_path / f"pr-{NUMBER}" / "worktree"),
+    ]
+
+
+def test_repeated_review_replaces_the_previous_scratch(tmp_path: Path) -> None:
+    _review(tmp_path, _FakeRunner())
+    stale = tmp_path / f"pr-{NUMBER}" / "stale"
+    stale.write_text("left over from an earlier head", encoding="utf-8")
+    _review(tmp_path, _FakeRunner())
+    assert not stale.exists()
 
 
 @pytest.mark.parametrize(

@@ -198,6 +198,15 @@ def test_limit_caps_new_reviews_after_skips(fakes: SimpleNamespace) -> None:
     assert _fetched_numbers(fakes) == [2]
 
 
+def test_draft_and_bot_authored_pulls_are_skipped(fakes: SimpleNamespace) -> None:
+    draft = PullSummary(number=1, head_sha=_head(1), title="D", body="", draft=True, author="contributor")
+    bot = PullSummary(number=2, head_sha=_head(2), title="B", body="", draft=False, author="os-autoinst-review")
+    normal = PullSummary(number=3, head_sha=_head(3), title="N", body="", draft=False, author="contributor")
+    fakes.listing.return_value = [draft, bot, normal]
+    assert main(_argv(fakes)) == EXIT_OK
+    assert _fetched_numbers(fakes) == [3]
+
+
 @pytest.mark.parametrize(
     "configure",
     [
