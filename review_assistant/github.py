@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """GitHub access with two credentials: a read-only token for listing and diffs, the write token for reviews."""
 
 from collections.abc import Iterator, Mapping, MutableMapping

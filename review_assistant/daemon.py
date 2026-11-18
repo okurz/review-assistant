@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Continuous review loop: poll open pull requests, review them one at a time, survive transient failures."""
 
 import json

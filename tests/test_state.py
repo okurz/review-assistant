@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the dedup state file."""
 
 from pathlib import Path

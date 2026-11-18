@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Makes this process non-dumpable, so a same-user child (the review agent) cannot read its environment."""
 
 import ctypes

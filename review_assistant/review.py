@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Checks out a pull request, runs the Hermes review agent over it, and lints the review it drafts."""
 
 import json

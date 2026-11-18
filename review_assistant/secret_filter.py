@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Redacts credentials from agent-authored text: the review and its errors are the agent's only output that leaves."""
 
 import json

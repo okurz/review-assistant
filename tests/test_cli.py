@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the review CLI, with GitHub, the skill checkout and Hermes replaced by fakes."""
 
 import json

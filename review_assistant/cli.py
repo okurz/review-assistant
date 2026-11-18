@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Command line entry point: review open pull requests with Hermes, post only with --post."""
 
 import argparse

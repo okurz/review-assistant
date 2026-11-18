@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the continuous review loop, with scripted GitHub listings and fake reviews; no network, no sleeping."""
 
 import threading

@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Local record of posted reviews, keyed by repository and pull request number."""
 
 from pathlib import Path

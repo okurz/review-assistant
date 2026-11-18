@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Pinned openQA-skill checkout used as the review instructions."""
 
 import subprocess  # noqa: S404 - git is an external interface, argv only, no shell

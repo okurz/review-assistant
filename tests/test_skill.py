@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the pinned openQA-skill checkout."""
 
 import subprocess  # noqa: S404 - builds CompletedProcess and CalledProcessError fixtures only

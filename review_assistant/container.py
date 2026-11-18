@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Host-side builder of the rootless podman run for one review pass; it holds paths, never credential values."""
 
 import argparse

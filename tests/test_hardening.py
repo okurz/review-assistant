@@ -1,5 +1,5 @@
 # Copyright SUSE LLC
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the non-dumpable guard, with prctl replaced by a fake libc."""
 
 import ctypes
