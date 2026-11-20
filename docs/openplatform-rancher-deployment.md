@@ -86,6 +86,19 @@ Expected: exit code 0 and a generated review in the log, with no GitHub post. Ch
 
 To rerun the Job, delete it first and reapply the dry-run overlay. Reapplying the dry-run overlay after stage 2 scales the Deployment back to 0.
 
+### Status of the DeepSeek route
+
+The Helmcode route is verified end to end up to the review gate, not to an accepted review:
+
+- The image `v0.1.3` (commit `47fa76b`) builds and publishes through the `container` workflow.
+- The dry-run Job reaches the model through the loopback proxy and produces a review draft; the API key does not appear
+  in the pod spec, the Job spec or the logs.
+- `review-lint` rejects that draft (an `APPROVE` that carries findings, and an over-long sentence), so the Job exits
+  non-zero (`failed` reaches the backoff limit). No review is recorded and nothing is posted.
+
+Until the model output passes `review-lint`, treat this route as a dry-run prototype. Do not run with `--post`. The
+fix belongs in the review prompt or the output handling, not in `review-lint`.
+
 ## Continuous dry run (stage 2)
 
 After stage 1 passes, apply the normal overlay and confirm the Deployment is up:
