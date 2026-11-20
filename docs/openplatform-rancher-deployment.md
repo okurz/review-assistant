@@ -23,13 +23,17 @@ The repository does not contain the GCP project ID or the cluster host. Before d
 
 ## Provision secrets
 
-The Secret `review-assistant-secrets` holds three keys. Values never go into git.
+The Secret `review-assistant-secrets` holds four keys. Values never go into git.
 
 | Key | Content | Mounted as |
 |-----|---------|------------|
 | `gh-write-token` | GitHub token for posting reviews | env `REVIEW_ASSISTANT_GH_TOKEN` |
 | `gh-read-token` | read-only GitHub token | env `REVIEW_ASSISTANT_GH_READ_TOKEN` |
+| `helmcode-api-key` | Helmcode API key of the review route | env `REVIEW_ASSISTANT_INFERENCE_KEY` |
 | `vertex-adc.json` | Google ADC file of the Vertex service account | `/etc/review-assistant/secrets/gcloud/application_default_credentials.json` |
+
+`helmcode-api-key` is the only key the shipped ConfigMap needs. `vertex-adc.json` stays because the deployment mounts it
+for a switch back to the Vertex Gemini route; the current `custom` provider reads no Google credential.
 
 Create the Secret without writing the values to shell history or to a file in the repository:
 
@@ -37,12 +41,13 @@ Create the Secret without writing the values to shell history or to a file in th
 kubectl --namespace review-assistant create secret generic review-assistant-secrets \
   --from-file=gh-write-token=/secure/path/gh-write-token \
   --from-file=gh-read-token=/secure/path/gh-read-token \
+  --from-file=helmcode-api-key=/secure/path/helmcode-api-key \
   --from-file=vertex-adc.json=/secure/path/application_default_credentials.json
 ```
 
 Alternatively, copy `deploy/kubernetes/secret-template.yaml` to `deploy/kubernetes/review-assistant-secrets.yaml` (git-ignored), replace every `REPLACE_ME`, and run `kubectl apply --filename` on it. Delete the filled copy afterwards.
 
-Or create the Secret in the Rancher UI under Storage > Secrets in namespace `review-assistant` with the same three keys.
+Or create the Secret in the Rancher UI under Storage > Secrets in namespace `review-assistant` with the same four keys.
 
 ## Deploy
 
@@ -51,9 +56,21 @@ Or create the Secret in the Rancher UI under Storage > Secrets in namespace `rev
 3. Run the one-off dry run first (stage 1 below).
 4. Apply the workload with the OpenPlatform overlay: `kubectl apply --kustomize deploy/kubernetes/overlays/openplatform`.
 
-The overlay pins `ghcr.io/os-autoinst/review-assistant:latest` and sets `pilot_cap: 3`. It creates the ServiceAccount, ConfigMap, PersistentVolumeClaim `review-assistant-state`, NetworkPolicy and the Deployment `review-assistant` in the existing namespace. The Deployment starts the daemon in dry-run mode (no `--post`), so it prints reviews and does not post them.
+The overlay pins `ghcr.io/os-autoinst/review-assistant:latest` and sets `pilot_cap: 3` for `provider: custom`,
+`model: deepseek-v4-flash` and `api_base: https://api.helmcode.com/v1`. It creates the ServiceAccount, ConfigMap, PersistentVolumeClaim `review-assistant-state`, NetworkPolicy and the Deployment `review-assistant` in the existing namespace. The Deployment starts the daemon in dry-run mode (no `--post`), so it prints reviews and does not post them.
 
 Local prototype targets are intentionally kept outside this repository; use an operator-specific overlay and image tag for those.
+
+## Model route
+
+The ConfigMap carries `provider: custom`, `model: deepseek-v4-flash` and `api_base: https://api.helmcode.com/v1`, the
+same pair the operator's opencode and pi run. Hermes reaches that endpoint through a loopback proxy that holds the key
+from `REVIEW_ASSISTANT_INFERENCE_KEY`; the agent sees only the sentinel `CUSTOM_API_KEY=helmcode-proxy`, and
+`check-isolation` asserts exactly that. The proxy binds `127.0.0.1` only, so it needs no Service and no ingress, and the
+endpoint is public, so the existing `0.0.0.0/0:443` egress rule covers it.
+
+To switch back to Gemini, set `provider: google-vertex`, `model: google/gemini-3.8-flash` and remove `api_base` from
+the ConfigMap's `reviewer.yaml`, then set the real project in `hermes-config.yaml`. The ADC mount stays in place.
 
 ## One-off dry run (stage 1)
 
