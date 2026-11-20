@@ -6,11 +6,12 @@ import json
 import re
 import shutil
 import subprocess  # noqa: S404 - git, hermes and python3 are external interfaces, argv only, no shell
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from review_assistant.config import ReviewerConfig
+from review_assistant.inference_proxy import inference_env
 from review_assistant.secret_filter import holds_secret, redact
 
 PLAYBOOK = "openqa-pr-review"
@@ -190,14 +191,15 @@ def _prompt(pr: PullRequest, skill_root: Path, scratch: Scratch) -> str:
     )
 
 
-def agent_env(directory: Path) -> list[str]:
-    """Return the argv prefix that confines the agent's file writes to directory."""
-    return ["env", f"HERMES_WRITE_SAFE_ROOT={directory}"]
+def agent_env(directory: Path, extra: Mapping[str, str] | None = None) -> list[str]:
+    """Return the argv prefix that confines the agent's file writes to directory and adds the extra variables."""
+    assignments = (f"{name}={value}" for name, value in (extra or {}).items())
+    return ["env", f"HERMES_WRITE_SAFE_ROOT={directory}", *assignments]
 
 
-def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path) -> list[str]:
+def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path, proxy_url: str | None = None) -> list[str]:
     return [
-        *agent_env(directory),
+        *agent_env(directory, inference_env(proxy_url)),
         "hermes",
         "-z",
         prompt,
@@ -212,10 +214,17 @@ def _hermes_argv(config: ReviewerConfig, prompt: str, directory: Path) -> list[s
     ]
 
 
-def _review(config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runner: CommandRunner) -> Path:
+def _review(
+    config: ReviewerConfig,
+    pr: PullRequest,
+    workspace: Workspace,
+    runner: CommandRunner,
+    proxy_url: str | None = None,
+) -> Path:
     scratch = _prepare_scratch(workspace.scratch_root, pr)
     checkout_pr(workspace.clone, pr, scratch, runner)
-    _check(runner(_hermes_argv(config, _prompt(pr, workspace.skill_root, scratch), scratch.directory)), "hermes")
+    prompt = _prompt(pr, workspace.skill_root, scratch)
+    _check(runner(_hermes_argv(config, prompt, scratch.directory, proxy_url)), "hermes")
     if not scratch.review.is_file():
         msg = f"hermes wrote no review at {scratch.review}"
         raise ReviewError(msg)
@@ -245,14 +254,19 @@ def _review(config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runne
 
 
 def review_pull_request(
-    config: ReviewerConfig, pr: PullRequest, workspace: Workspace, runner: CommandRunner = run_command
+    config: ReviewerConfig,
+    pr: PullRequest,
+    workspace: Workspace,
+    runner: CommandRunner = run_command,
+    proxy_url: str | None = None,
 ) -> Path:
     """Check out pr, have Hermes draft its review, lint it, and return the review JSON if it holds no credential.
 
+    proxy_url is the loopback inference proxy Hermes must reach instead of the upstream endpoint.
     Errors carry agent-authored output (Hermes' reply, review-lint findings), so they are redacted before they reach
     a log.
     """
     try:
-        return _review(config, pr, workspace, runner)
+        return _review(config, pr, workspace, runner, proxy_url)
     except ReviewError as error:
         raise ReviewError(redact(str(error), workspace.secrets)) from None

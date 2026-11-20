@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from review_assistant.github import GH_READ_ENV
+from review_assistant.inference_proxy import INFERENCE_KEY_ENV
 
 IMAGE = "review-assistant:dev"
 CONTAINER_CONFIG = "/config/reviewer.yaml"
@@ -32,6 +33,7 @@ class HostPaths:
 
     adc_file: Path
     read_token_file: Path
+    inference_key_file: Path
     env_file: Path
     config_file: Path
     hermes_config_file: Path
@@ -55,6 +57,8 @@ def build_run_argv(paths: HostPaths, review_args: Sequence[str], command: str = 
         str(paths.env_file),
         "-e",
         GH_READ_ENV,
+        "-e",
+        INFERENCE_KEY_ENV,
         "-e",
         "HOME=/tmp",
         "-e",
@@ -88,11 +92,17 @@ def default_host_paths(repo: Path) -> HostPaths:
     return HostPaths(
         adc_file=home / ".config" / "gcloud" / "application_default_credentials.json",
         read_token_file=config_home / "read-token",
+        inference_key_file=config_home / "inference-key",
         env_file=config_home / "write.env",
         config_file=repo / "config" / "reviewer.yaml",
         hermes_config_file=repo / "deploy" / "hermes" / "config.yaml",
         state_dir=home / ".local" / "state" / "review-assistant",
     )
+
+
+def _optional_secret(path: Path) -> str:
+    """Return the trimmed secret in path, or an empty value when the file is absent (a provider without a key)."""
+    return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -106,5 +116,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     command, review_args = ("check-isolation", []) if args.check_isolation else ("run", review_args)
     paths = default_host_paths(Path(__file__).resolve().parents[1])
     paths.state_dir.mkdir(parents=True, exist_ok=True)
-    env = os.environ | {GH_READ_ENV: paths.read_token_file.read_text(encoding="utf-8").strip()}
+    env = os.environ | {
+        GH_READ_ENV: paths.read_token_file.read_text(encoding="utf-8").strip(),
+        INFERENCE_KEY_ENV: _optional_secret(paths.inference_key_file),
+    }
     return subprocess.run(build_run_argv(paths, review_args, command), check=False, env=env).returncode  # noqa: S603 - argv built here, no shell

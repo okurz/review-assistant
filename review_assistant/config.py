@@ -4,9 +4,10 @@
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _TOKEN_PATTERN = re.compile(r"github_pat_\w+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{30,}")
 
@@ -33,8 +34,36 @@ class ReviewerConfig(BaseModel):
     skill: SkillConfig
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    api_base: str | None = None
     toolsets: str = Field(min_length=1)
     pilot_cap: int = Field(default=10, ge=1)
+
+    @field_validator("api_base")
+    @classmethod
+    def _api_base_is_a_plain_https_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        rejected = any((
+            parts.scheme != "https",
+            not parts.netloc,
+            parts.username,
+            parts.password,
+            parts.query,
+            parts.fragment,
+            value.endswith("/"),
+        ))
+        if rejected:
+            msg = "api_base must be an https base URL without credentials, query, fragment or trailing slash"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def _api_base_only_for_the_custom_provider(self) -> "ReviewerConfig":
+        if (self.provider == "custom") != (self.api_base is not None):
+            msg = "api_base is required exactly when provider is custom"
+            raise ValueError(msg)
+        return self
 
 
 def _find_token_like(value: object) -> bool:

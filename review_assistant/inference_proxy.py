@@ -20,6 +20,7 @@ from review_assistant import proxy
 from review_assistant.config import ConfigError
 
 SENTINEL_API_KEY = "helmcode-proxy"
+INFERENCE_KEY_ENV = "REVIEW_ASSISTANT_INFERENCE_KEY"
 BASE_URL_ENV = "CUSTOM_BASE_URL"
 API_KEY_ENV = "CUSTOM_API_KEY"
 API_PATH = "/v1"

@@ -70,6 +70,50 @@ def test_token_like_value_nested_in_list_is_rejected() -> None:
         parse_config({**VALID, "skill": nested})
 
 
+CUSTOM = {**VALID, "provider": "custom", "model": "deepseek-v4-flash", "api_base": "https://api.helmcode.com/v1"}
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_base"),
+    [
+        pytest.param("custom", "https://api.helmcode.com/v1", id="custom-with-base"),
+        pytest.param("google-vertex", None, id="vertex-without-base"),
+    ],
+)
+def test_api_base_matches_the_provider(provider: str, api_base: str | None) -> None:
+    config = parse_config({**VALID, "provider": provider, "api_base": api_base})
+    assert (config.provider, config.api_base) == (provider, api_base)
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_base"),
+    [
+        pytest.param("custom", None, id="custom-without-base"),
+        pytest.param("google-vertex", "https://api.helmcode.com/v1", id="vertex-with-base"),
+    ],
+)
+def test_api_base_is_required_exactly_for_the_custom_provider(provider: str, api_base: str | None) -> None:
+    with pytest.raises(pydantic.ValidationError, match="api_base is required exactly when provider is custom"):
+        parse_config({**VALID, "provider": provider, "api_base": api_base})
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        pytest.param("http://api.helmcode.com/v1", id="not-https"),
+        pytest.param("https:///v1", id="no-host"),
+        pytest.param("https://user@api.helmcode.com/v1", id="user"),
+        pytest.param("https://:secret@api.helmcode.com/v1", id="password"),
+        pytest.param("https://api.helmcode.com/v1?x=1", id="query"),
+        pytest.param("https://api.helmcode.com/v1#x", id="fragment"),
+        pytest.param("https://api.helmcode.com/v1/", id="trailing-slash"),
+    ],
+)
+def test_api_base_must_be_a_plain_https_url(api_base: str) -> None:
+    with pytest.raises(pydantic.ValidationError, match="api_base must be an https base URL"):
+        parse_config({**CUSTOM, "api_base": api_base})
+
+
 def test_example_config_loads_with_pilot_settings() -> None:
     config = load_config(EXAMPLE)
     assert (config.provider, config.model, config.toolsets, config.pilot_cap) == (

@@ -5,10 +5,12 @@
 import json
 import os
 import signal
+import socket
 import subprocess  # noqa: S404 - builds CompletedProcess fixtures only
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -18,6 +20,7 @@ from review_assistant.cli import EXIT_FAILED, EXIT_OK, EXIT_USAGE, main
 from review_assistant.config import ReviewerConfig
 from review_assistant.github import PollResult, PullSummary, ReviewDraft
 from review_assistant.hardening import HardeningError
+from review_assistant.inference_proxy import INFERENCE_KEY_ENV
 from review_assistant.review import PullRequest, ReviewError, Workspace
 from review_assistant.skill import SkillCheckoutError
 from review_assistant.state import ReviewRecord, load_state, save_state, state_key
@@ -27,6 +30,17 @@ REPO_URL = "https://github.com/os-autoinst/openQA.git"
 EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
 READ_TOKEN = "read-token-placeholder"
 WRITE_TOKEN = "write-token-placeholder"
+INFERENCE_KEY = "sk-" + "inference-key-placeholder" * 2
+CUSTOM_CONFIG = """agent_name: os-autoinst-review
+skill:
+  repo: https://github.com/os-autoinst/openQA-skill.git
+  sha: a6d255abcbce67a380f6716c94e861869ed64882
+provider: custom
+model: deepseek-v4-flash
+api_base: https://api.helmcode.example/v1
+toolsets: file
+pilot_cap: 10
+"""
 PULL_NUMBERS = (1, 2, 3)
 
 
@@ -49,6 +63,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
         clone=tmp_path / "openQA",
         review_errors={},
         review_overrides={},
+        proxy_urls=[],
         post_errors={},
     )
 
@@ -63,7 +78,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
             changed_lines=3,
         )
 
-    def draft(_config: ReviewerConfig, pull: PullRequest, workspace: Workspace) -> Path:
+    def draft(_config: ReviewerConfig, pull: PullRequest, workspace: Workspace, proxy_url: str | None = None) -> Path:
         if pull.number in ns.review_errors:
             raise ns.review_errors[pull.number]
         directory = workspace.scratch_root / f"pr-{pull.number}"
@@ -77,6 +92,7 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
         }
         path = directory / f"review-{pull.number}.json"
         path.write_text(json.dumps(review), encoding="utf-8")
+        ns.proxy_urls.append(proxy_url)
         return path
 
     def post(_token: str, _repo: str, number: int, review: dict) -> int:
@@ -95,11 +111,11 @@ def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
     return ns
 
 
-def _argv(ns: SimpleNamespace, *extra: str) -> list[str]:
+def _argv(ns: SimpleNamespace, *extra: str, config: Path = EXAMPLE) -> list[str]:
     return [
         "run",
         "--config",
-        str(EXAMPLE),
+        str(config),
         "--state-file",
         str(ns.state_file),
         "--skill-cache",
@@ -234,12 +250,12 @@ def test_failed_pull_is_logged_and_not_recorded_while_run_continues(
 @pytest.mark.parametrize(
     ("post", "secrets"),
     [
-        pytest.param(True, (READ_TOKEN, WRITE_TOKEN), id="post-guards-both-tokens"),
-        pytest.param(False, (READ_TOKEN, ""), id="dry-run-guards-read-token"),
+        pytest.param(True, (READ_TOKEN, WRITE_TOKEN, ""), id="post-guards-both-tokens"),
+        pytest.param(False, (READ_TOKEN, "", ""), id="dry-run-guards-read-token"),
     ],
 )
 def test_review_is_told_which_tokens_must_never_appear(
-    fakes: SimpleNamespace, mocker: MockerFixture, *, post: bool, secrets: tuple[str, str]
+    fakes: SimpleNamespace, mocker: MockerFixture, *, post: bool, secrets: tuple[str, str, str]
 ) -> None:
     _with_write_token(mocker)
     main(_argv(fakes, *(["--post"] if post else [])))
@@ -275,13 +291,19 @@ def test_check_isolation_runs_script_as_the_agent_would_run(
     assert argv == [
         "env",
         f"HERMES_WRITE_SAFE_ROOT={scratch}",
+        "CUSTOM_BASE_URL=http://127.0.0.1:1/v1",
+        "CUSTOM_API_KEY=helmcode-proxy",
         str(isolation_script),
         str(fakes.state_file),
         str(fakes.clone),
         str(fakes.checkout.return_value),
         scratch,
     ]
-    assert not {"REVIEW_ASSISTANT_GH_TOKEN", "REVIEW_ASSISTANT_GH_READ_TOKEN"} & set(environ_at_run[0])
+    assert not {
+        "REVIEW_ASSISTANT_GH_TOKEN",
+        "REVIEW_ASSISTANT_GH_READ_TOKEN",
+        "REVIEW_ASSISTANT_INFERENCE_KEY",
+    } & set(environ_at_run[0])
     fakes.listing.assert_not_called()
 
 
@@ -325,8 +347,11 @@ def test_absent_clone_is_cloned_into_the_scratch_root(fakes: SimpleNamespace) ->
     assert clone.parent.name.startswith("review-assistant-")
 
 
-def _daemon_argv(ns: SimpleNamespace, heartbeat: Path, *extra: str) -> list[str]:
-    return ["daemon", *_argv(ns, "--heartbeat-file", str(heartbeat), "--poll-interval", "0", *extra)[1:]]
+def _daemon_argv(ns: SimpleNamespace, heartbeat: Path, *extra: str, config: Path = EXAMPLE) -> list[str]:
+    return [
+        "daemon",
+        *_argv(ns, "--heartbeat-file", str(heartbeat), "--poll-interval", "0", *extra, config=config)[1:],
+    ]
 
 
 def test_daemon_sweeps_then_stops_between_reviews_on_sigterm(
@@ -350,3 +375,65 @@ def test_daemon_sweeps_then_stops_between_reviews_on_sigterm(
     assert set(load_state(fakes.state_file)) == {state_key(REPO, n) for n in PULL_NUMBERS}
     assert {call.args[0] for call in signal_mock.call_args_list} == {signal.SIGTERM, signal.SIGINT}
     assert (tmp_path / "heartbeat").exists()
+
+
+@pytest.fixture
+def custom_config(tmp_path: Path) -> Path:
+    path = tmp_path / "custom.yaml"
+    path.write_text(CUSTOM_CONFIG, encoding="utf-8")
+    return path
+
+
+def _proxy_env(mocker: MockerFixture) -> None:
+    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN, INFERENCE_KEY_ENV: INFERENCE_KEY})
+
+
+def test_custom_route_hands_the_proxy_url_and_the_sentinel(
+    fakes: SimpleNamespace, mocker: MockerFixture, custom_config: Path
+) -> None:
+    _proxy_env(mocker)
+    assert main(_argv(fakes, config=custom_config)) == EXIT_OK
+    proxy_url = fakes.review.call_args.kwargs["proxy_url"]
+    assert proxy_url is not None
+    assert proxy_url.startswith("http://127.0.0.1:")
+    assert proxy_url.endswith("/v1")
+    assert fakes.review.call_args.args[2].secrets == (READ_TOKEN, "", INFERENCE_KEY)
+    assert INFERENCE_KEY_ENV not in os.environ
+
+
+def test_vertex_route_runs_without_a_proxy(fakes: SimpleNamespace) -> None:
+    assert main(_argv(fakes)) == EXIT_OK
+    assert fakes.review.call_args.kwargs["proxy_url"] is None
+    assert fakes.review.call_args.args[2].secrets == (READ_TOKEN, "", "")
+
+
+def test_missing_inference_key_is_reported_before_listing(
+    fakes: SimpleNamespace, mocker: MockerFixture, custom_config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN}, clear=True)
+    assert main(_argv(fakes, config=custom_config)) == EXIT_USAGE
+    assert "inference API key is missing" in capsys.readouterr().err
+    fakes.listing.assert_not_called()
+
+
+def test_daemon_uses_the_proxy_and_releases_its_port(
+    fakes: SimpleNamespace, mocker: MockerFixture, tmp_path: Path, custom_config: Path
+) -> None:
+    _proxy_env(mocker)
+    signal_mock = mocker.patch("review_assistant.cli.signal.signal")
+    polls: list[str | None] = []
+
+    def poll(_token: str, _repo: str, etag: str | None) -> PollResult:
+        polls.append(etag)
+        if len(polls) == 1:
+            return PollResult(pulls=PULLS[:1], etag="v1", remaining=5000, reset=None)
+        signal_mock.call_args_list[0].args[1](signal.SIGTERM, None)
+        return PollResult(pulls=None, etag="v1", remaining=5000, reset=None)
+
+    mocker.patch("review_assistant.cli.poll_open_pulls", side_effect=poll)
+    assert main(_daemon_argv(fakes, tmp_path / "heartbeat", config=custom_config)) == EXIT_OK
+    proxy_url = fakes.review.call_args.kwargs["proxy_url"]
+    assert proxy_url is not None
+    parsed = urlparse(proxy_url)
+    with pytest.raises(ConnectionRefusedError):
+        socket.create_connection((parsed.hostname or "", parsed.port or 0), timeout=1).close()

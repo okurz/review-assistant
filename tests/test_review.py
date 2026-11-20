@@ -261,6 +261,25 @@ def test_failed_review_is_rejected(tmp_path: Path, runner: _FakeRunner, message:
         _review(tmp_path, runner)
 
 
+def test_a_proxied_route_hands_hermes_a_sentinel_instead_of_the_key(tmp_path: Path) -> None:
+    runner = _FakeRunner()
+    review_pull_request(
+        CONFIG,
+        PR,
+        Workspace(SKILL_ROOT, tmp_path, CLONE, (SECRET, "")),
+        runner,
+        proxy_url="http://127.0.0.1:3999/v1",
+    )
+    argv = runner.hermes_argv()
+    assert argv[1:5] == [
+        f"HERMES_WRITE_SAFE_ROOT={tmp_path / f'pr-{NUMBER}'}",
+        "CUSTOM_BASE_URL=http://127.0.0.1:3999/v1",
+        "CUSTOM_API_KEY=helmcode-proxy",
+        "hermes",
+    ]
+    assert argv[5] == "-z"
+
+
 @pytest.mark.parametrize(
     "review_text",
     [

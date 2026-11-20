@@ -2,6 +2,7 @@
 # Started by `review-assistant check-isolation` with the environment and write confinement the review agent gets.
 # Exits 0 only if the agent cannot reach a GitHub token or credential store and cannot write outside its scratch.
 # The Vertex ADC stays readable by design: accepted risk D21 of tasks/001_210027_automated_model_review.md.
+# The inference key stays out of this environment: the agent holds the non-secret `helmcode-proxy` sentinel instead.
 set -uo pipefail
 
 state=$1 clone=$2 skill=$3 scratch=$4
@@ -30,8 +31,10 @@ import sys
 from agent.file_safety import get_write_denied_error
 sys.exit(0 if get_write_denied_error(sys.argv[1]) else 1)' "$1")
 }
+inference_key_is_the_sentinel() { [ "${CUSTOM_API_KEY:-}" = helmcode-proxy ]; }
 
 check "no token variable in the agent environment" not_ token_in_env
+check "custom provider key is the non-secret sentinel" inference_key_is_the_sentinel
 check "environment of the CLI (pid $PPID) unreadable" not_ cat "/proc/$PPID/environ"
 for token_file in /run/secrets/gh-read-token /etc/review-assistant/secrets/gh-read-token; do
     check "no read-token file at $token_file" test ! -e "$token_file"

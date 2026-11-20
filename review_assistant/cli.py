@@ -12,7 +12,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
@@ -32,6 +32,7 @@ from review_assistant.github import (
     take_write_token,
 )
 from review_assistant.hardening import HardeningError, make_non_dumpable
+from review_assistant.inference_proxy import API_PATH, INFERENCE_KEY_ENV, InferenceProxy, inference_env
 from review_assistant.review import ReviewError, Workspace, agent_env, ensure_clone, review_pull_request
 from review_assistant.skill import SkillCheckoutError, checkout_skill
 from review_assistant.state import ReviewRecord, State, is_reviewed, load_state, save_state, state_key
@@ -44,6 +45,7 @@ DEFAULT_STATE = Path.home() / ".local/state/review-assistant/state.json"
 DEFAULT_SKILL_CACHE = Path.home() / ".cache/review-assistant/skills"
 ISOLATION_CHECK = Path("/opt/check-isolation.sh")
 DEFAULT_HEARTBEAT = Path("/tmp/heartbeat")  # noqa: S108 - liveness file of the container, tmpfs in the pod
+PLACEHOLDER_PROXY_URL = f"http://127.0.0.1:1{API_PATH}"
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
@@ -56,6 +58,8 @@ class _Session:
     config: ReviewerConfig
     read_token: str
     post_token: str | None
+    inference_key: str
+    proxy_url: str | None
     skill_root: Path
     skill_checkout: Path
     clone: Path
@@ -91,9 +95,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def _review_one(session: _Session, summary: PullSummary) -> None:
     pull = fetch_pull_request(session.read_token, REPO, summary.number)
-    secrets = (session.read_token, session.post_token or "")
+    secrets = (session.read_token, session.post_token or "", session.inference_key)
     workspace = Workspace(session.skill_root, session.scratch_root, session.clone, secrets)
-    review_path = review_pull_request(session.config, pull, workspace)
+    review_path = review_pull_request(session.config, pull, workspace, proxy_url=session.proxy_url)
     text = review_path.read_text(encoding="utf-8")
     review = json.loads(text)
     ReviewDraft.model_validate(review)
@@ -139,14 +143,18 @@ def _post_token(*, post: bool) -> str | None:
 def _session(args: argparse.Namespace, config: ReviewerConfig) -> Iterator[_Session]:
     post_token = _post_token(post=args.post)
     read_token = take_read_token(os.environ)
+    inference_key = os.environ.pop(INFERENCE_KEY_ENV, "").strip()
     skill_checkout = checkout_skill(config.skill, args.skill_cache)
-    with tempfile.TemporaryDirectory(prefix="review-assistant-") as scratch_root:
+    with ExitStack() as stack, tempfile.TemporaryDirectory(prefix="review-assistant-") as scratch_root:
+        proxy_url = _start_inference_proxy(stack, config, inference_key)
         clone = args.clone if args.clone is not None else Path(scratch_root) / "openQA"
         ensure_clone(REPO_URL, clone)
         yield _Session(
             config=config,
             read_token=read_token,
             post_token=post_token,
+            inference_key=inference_key,
+            proxy_url=proxy_url,
             skill_root=skill_checkout / SKILL_SUBDIR,
             skill_checkout=skill_checkout,
             clone=clone,
@@ -154,6 +162,13 @@ def _session(args: argparse.Namespace, config: ReviewerConfig) -> Iterator[_Sess
             state_file=args.state_file,
             state=load_state(args.state_file),
         )
+
+
+def _start_inference_proxy(stack: ExitStack, config: ReviewerConfig, inference_key: str) -> str | None:
+    """Start the loopback proxy the agent talks to, so the real key never enters the agent's environment."""
+    if config.api_base is None:
+        return None
+    return stack.enter_context(InferenceProxy(config.api_base, inference_key)).url
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -204,7 +219,8 @@ def _check_isolation(args: argparse.Namespace) -> int:
         scratch = session.scratch_root / "check"
         scratch.mkdir()
         paths = (session.state_file, session.clone, session.skill_checkout, scratch)
-        argv = [*agent_env(scratch), str(ISOLATION_CHECK), *map(str, paths)]
+        extra = inference_env(PLACEHOLDER_PROXY_URL)
+        argv = [*agent_env(scratch, extra), str(ISOLATION_CHECK), *map(str, paths)]
         return subprocess.run(argv, check=False).returncode  # noqa: S603 - fixed script path, no shell
 
 

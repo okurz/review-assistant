@@ -16,12 +16,14 @@ from review_assistant.container import IMAGE, HostPaths, build_run_argv, default
 
 REPO = Path(__file__).resolve().parents[1]
 READ_TOKEN = "read-token-placeholder"
+INFERENCE_KEY = "sk-" + "inference-key-placeholder" * 2
 
 
 def _paths(tmp_path: Path) -> HostPaths:
     return HostPaths(
         adc_file=tmp_path / "adc.json",
         read_token_file=tmp_path / "read-token",
+        inference_key_file=tmp_path / "inference-key",
         env_file=tmp_path / "write.env",
         config_file=tmp_path / "reviewer.yaml",
         hermes_config_file=tmp_path / "config.yaml",
@@ -87,6 +89,12 @@ def test_read_token_is_passed_by_name_only(tmp_path: Path) -> None:
     assert not any("REVIEW_ASSISTANT_GH_READ_TOKEN=" in arg for arg in argv)
 
 
+def test_inference_key_is_passed_by_name_only(tmp_path: Path) -> None:
+    argv = build_run_argv(_paths(tmp_path), [])
+    assert argv[argv.index("REVIEW_ASSISTANT_INFERENCE_KEY") - 1] == "-e"
+    assert not any("REVIEW_ASSISTANT_INFERENCE_KEY=" in arg for arg in argv)
+
+
 def test_write_token_is_passed_only_as_env_file_path(tmp_path: Path) -> None:
     argv = build_run_argv(_paths(tmp_path), ["--post"])
     assert argv[argv.index("--env-file") + 1] == str(tmp_path / "write.env")
@@ -116,6 +124,7 @@ def test_review_arguments_follow_image(tmp_path: Path) -> None:
     [
         pytest.param("adc_file", id="adc"),
         pytest.param("read_token_file", id="read-token"),
+        pytest.param("inference_key_file", id="inference-key"),
         pytest.param("env_file", id="write-env"),
     ],
 )
@@ -135,7 +144,9 @@ def test_image_bakes_the_skill_at_the_pin_of_the_example_config() -> None:
 def podman(mocker: MockerFixture, tmp_path: Path) -> MagicMock:
     token_file = tmp_path / "read-token"
     token_file.write_text(f"{READ_TOKEN}\n", encoding="utf-8")
-    paths = dataclasses.replace(_paths(tmp_path), read_token_file=token_file)
+    key_file = tmp_path / "inference-key"
+    key_file.write_text(f"{INFERENCE_KEY}\n", encoding="utf-8")
+    paths = dataclasses.replace(_paths(tmp_path), read_token_file=token_file, inference_key_file=key_file)
     mocker.patch("review_assistant.container.default_host_paths", return_value=paths)
     return mocker.patch("review_assistant.container.subprocess.run", return_value=subprocess.CompletedProcess([], 4))
 
@@ -170,3 +181,18 @@ def test_main_hands_read_token_to_podman_through_its_environment_only(podman: Ma
     main([])
     assert podman.call_args.kwargs["env"]["REVIEW_ASSISTANT_GH_READ_TOKEN"] == READ_TOKEN
     assert not any(READ_TOKEN in arg for arg in podman.call_args.args[0])
+
+
+def test_main_hands_the_inference_key_through_the_environment_only(podman: MagicMock) -> None:
+    main([])
+    assert podman.call_args.kwargs["env"]["REVIEW_ASSISTANT_INFERENCE_KEY"] == INFERENCE_KEY
+    assert not any(INFERENCE_KEY in arg for arg in podman.call_args.args[0])
+
+
+def test_main_tolerates_an_absent_inference_key_file(podman: MagicMock, tmp_path: Path, mocker: MockerFixture) -> None:
+    paths = dataclasses.replace(
+        _paths(tmp_path), read_token_file=tmp_path / "read-token", inference_key_file=tmp_path / "absent-key"
+    )
+    mocker.patch("review_assistant.container.default_host_paths", return_value=paths)
+    main([])
+    assert not podman.call_args.kwargs["env"]["REVIEW_ASSISTANT_INFERENCE_KEY"]
