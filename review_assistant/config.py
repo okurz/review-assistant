@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-_TOKEN_PATTERN = re.compile(r"github_pat_\w+|gh[pousr]_[A-Za-z0-9]{20,}")
+_TOKEN_PATTERN = re.compile(r"github_pat_\w+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{30,}")
 
 
 class ConfigError(RuntimeError):

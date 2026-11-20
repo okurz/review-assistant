@@ -45,11 +45,23 @@ def test_invalid_config_is_rejected(override: dict) -> None:
     [
         pytest.param("github_pat_11ABCDEFG0123456789_abcdefghijklmnop", id="fine-grained-token"),
         pytest.param("ghp_abcdefghijklmnopqrstuvwxyz0123456789", id="classic-token"),
+        pytest.param("sk-" + "a1B2_-c3D4" * 5, id="api-key"),
     ],
 )
 def test_token_like_value_is_rejected(secret: str) -> None:
     with pytest.raises(ValueError, match="token-like value"):
         parse_config({**VALID, "agent_name": secret})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("sk-short", id="api-key-prefix-below-the-length"),
+        pytest.param("os-autoinst-review", id="plain-name"),
+    ],
+)
+def test_short_prefix_or_name_is_not_token_like(value: str) -> None:
+    assert parse_config({**VALID, "agent_name": value}).agent_name == value
 
 
 def test_token_like_value_nested_in_list_is_rejected() -> None:

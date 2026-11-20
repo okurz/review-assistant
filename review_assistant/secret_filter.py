@@ -9,6 +9,7 @@ from collections.abc import Iterable
 REDACTED = "[redacted]"
 _CREDENTIAL = re.compile(
     r"github_pat_\w{20,}|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|sk-[A-Za-z0-9_-]{30,}"
     r"|ya29\.[\w-]{20,}|1//0[\w-]{20,}|GOCSPX-[\w-]{10,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
 )

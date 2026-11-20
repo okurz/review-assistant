@@ -18,6 +18,7 @@ KNOWN = "read-token-placeholder"
         pytest.param('{"body": "Looks fine."}', id="plain-review"),
         pytest.param('{"body": "See ghp_short and ya29. in the docs"}', id="prefixes-without-a-value"),
         pytest.param('{"body": "uses github_pat_ in a comment"}', id="pat-prefix-alone"),
+        pytest.param('{"body": "costs sk-12 per token"}', id="api-key-prefix-alone"),
         pytest.param("not json at all", id="unparsable-text"),
     ],
 )
@@ -35,6 +36,7 @@ def test_clean_text_holds_no_secret(text: str) -> None:
         pytest.param("ya29." + "c" * 40, id="google-access-token"),
         pytest.param("1//0" + "d" * 40, id="google-refresh-token"),
         pytest.param("GOCSPX-" + "e" * 20, id="google-client-secret"),
+        pytest.param("sk-proj-" + "a1B2_-c3D4" * 5, id="api-key"),
         pytest.param("-----BEGIN RSA PRIVATE KEY-----", id="private-key"),
     ],
 )
