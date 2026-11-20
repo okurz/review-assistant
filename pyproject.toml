@@ -12,6 +12,7 @@ dependencies = [
     "requests",
     "PyYAML",
     "pydantic",
+    "google-auth>=2.62.2",
 ]
 
 [project.urls]
