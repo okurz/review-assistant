@@ -5,7 +5,7 @@
 # The inference key stays out of this environment: the agent holds the non-secret `helmcode-proxy` sentinel instead.
 set -uo pipefail
 
-state=$1 clone=$2 skill=$3 scratch=$4
+state=$1 clone=$2 skill=$3 scratch=$4 sentinel=$5
 failures=0
 
 check() {
@@ -31,7 +31,7 @@ import sys
 from agent.file_safety import get_write_denied_error
 sys.exit(0 if get_write_denied_error(sys.argv[1]) else 1)' "$1")
 }
-inference_key_is_the_sentinel() { [ "${CUSTOM_API_KEY:-}" = helmcode-proxy ]; }
+inference_key_is_the_sentinel() { [ "${CUSTOM_API_KEY:-}" = "$sentinel" ]; }
 
 check "no token variable in the agent environment" not_ token_in_env
 check "custom provider key is the non-secret sentinel" inference_key_is_the_sentinel

@@ -3,6 +3,7 @@
 """Tests for the podman argv of one review pass: hardening, mount modes and absence of credential values."""
 
 import dataclasses
+import re
 import subprocess  # noqa: S404 - builds CompletedProcess fixtures only
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -145,6 +146,15 @@ def test_image_bakes_the_skill_at_the_pin_of_the_example_config() -> None:
         example.api_base,
         3,
     )
+
+
+def test_manifest_scanner_rejects_an_api_key() -> None:
+    script = (REPO / "deploy/kubernetes/validate.sh").read_text(encoding="utf-8")
+    pattern = re.search(r"SECRET_PATTERNS='([^']+)'", script)
+    assert pattern is not None
+    scanner = re.compile(pattern.group(1))
+    assert scanner.search("helmcode-api-key: sk-" + "a1B2_-" * 6)
+    assert not scanner.search("sk-short")
 
 
 @pytest.mark.parametrize(

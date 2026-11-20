@@ -6,6 +6,7 @@ Each proxy keeps its own routing, header and body policy; only the socket and wi
 proxies relay a streamed upstream answer unbuffered and release their port the same way.
 """
 
+import logging
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,8 @@ import requests
 LOOPBACK_HOST = "127.0.0.1"
 READ_CHUNK = 8192
 _END_OF_CHUNKS = b"0\r\n\r\n"
+
+log = logging.getLogger(__name__)
 
 
 class LoopbackServer(ThreadingHTTPServer):
@@ -36,11 +39,12 @@ def stop(server: ThreadingHTTPServer, thread: threading.Thread) -> None:
 
 
 def content_length(handler: BaseHTTPRequestHandler) -> int:
-    """Return the request body length, treating a missing or malformed header as an empty body."""
+    """Return the request body length, treating a missing, malformed or negative header as an empty body."""
     try:
-        return int(handler.headers.get("Content-Length", "0"))
+        length = int(handler.headers.get("Content-Length", "0"))
     except ValueError:
         return 0
+    return max(length, 0)
 
 
 def relay(handler: BaseHTTPRequestHandler, upstream: requests.Response) -> None:
@@ -51,11 +55,15 @@ def relay(handler: BaseHTTPRequestHandler, upstream: requests.Response) -> None:
     handler.send_header("Connection", "close")
     handler.end_headers()
     handler.close_connection = True
-    for chunk in filter(None, upstream.iter_content(chunk_size=READ_CHUNK)):
-        handler.wfile.write(f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n")
+    try:
+        for chunk in filter(None, upstream.iter_content(chunk_size=READ_CHUNK)):
+            handler.wfile.write(f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n")
+            handler.wfile.flush()
+        handler.wfile.write(_END_OF_CHUNKS)
         handler.wfile.flush()
-    handler.wfile.write(_END_OF_CHUNKS)
-    handler.wfile.flush()
+    except (OSError, requests.RequestException) as error:
+        # A client that hangs up or an upstream that breaks mid-stream must not surface as a traceback on stderr.
+        log.debug("relay stopped early: %s", error.__class__.__name__)
 
 
 def reply(handler: BaseHTTPRequestHandler, status: HTTPStatus, body: bytes, content_type: str) -> None:

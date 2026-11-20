@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reviewer configuration loaded from YAML; never carries the GitHub token."""
 
-import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-_TOKEN_PATTERN = re.compile(r"github_pat_\w+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{30,}")
+from review_assistant.secret_filter import CREDENTIAL_PATTERN
 
 
 class ConfigError(RuntimeError):
@@ -69,7 +68,7 @@ class ReviewerConfig(BaseModel):
 def _find_token_like(value: object) -> bool:
     match value:
         case str():
-            return _TOKEN_PATTERN.search(value) is not None
+            return CREDENTIAL_PATTERN.search(value) is not None
         case dict():
             return any(_find_token_like(item) for item in value.values())
         case list():
@@ -81,7 +80,7 @@ def _find_token_like(value: object) -> bool:
 def parse_config(data: object) -> ReviewerConfig:
     """Validate raw YAML data, refusing any token-like value."""
     if _find_token_like(data):
-        msg = "configuration contains a token-like value; set REVIEW_ASSISTANT_GH_TOKEN in the environment instead"
+        msg = "configuration contains a token-like value; keep credentials in the environment or a Secret"
         raise ValueError(msg)
     return ReviewerConfig.model_validate(data)
 

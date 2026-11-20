@@ -32,7 +32,13 @@ from review_assistant.github import (
     take_write_token,
 )
 from review_assistant.hardening import HardeningError, make_non_dumpable
-from review_assistant.inference_proxy import API_PATH, INFERENCE_KEY_ENV, InferenceProxy, inference_env
+from review_assistant.inference_proxy import (
+    API_PATH,
+    INFERENCE_KEY_ENV,
+    SENTINEL_API_KEY,
+    InferenceProxy,
+    inference_env,
+)
 from review_assistant.review import ReviewError, Workspace, agent_env, ensure_clone, review_pull_request
 from review_assistant.skill import SkillCheckoutError, checkout_skill
 from review_assistant.state import ReviewRecord, State, is_reviewed, load_state, save_state, state_key
@@ -220,7 +226,7 @@ def _check_isolation(args: argparse.Namespace) -> int:
         scratch.mkdir()
         paths = (session.state_file, session.clone, session.skill_checkout, scratch)
         extra = inference_env(PLACEHOLDER_PROXY_URL)
-        argv = [*agent_env(scratch, extra), str(ISOLATION_CHECK), *map(str, paths)]
+        argv = [*agent_env(scratch, extra), str(ISOLATION_CHECK), *map(str, paths), SENTINEL_API_KEY]
         return subprocess.run(argv, check=False).returncode  # noqa: S603 - fixed script path, no shell
 
 

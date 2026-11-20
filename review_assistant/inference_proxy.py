@@ -9,6 +9,7 @@ and out of the agent's environment, its argv, every configuration file and the l
 
 import json
 import logging
+import posixpath
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from typing import TYPE_CHECKING, Self, cast, override
@@ -25,7 +26,19 @@ BASE_URL_ENV = "CUSTOM_BASE_URL"
 API_KEY_ENV = "CUSTOM_API_KEY"
 API_PATH = "/v1"
 _UPSTREAM_TIMEOUT = 900.0
-_STRIPPED_HEADERS = frozenset({"authorization", "connection", "content-length", "host"})
+_STRIPPED_HEADERS = frozenset({
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+})
 _CONTENT_TYPE = "application/json"
 
 if TYPE_CHECKING:
@@ -68,15 +81,17 @@ class _InferenceHandler(BaseHTTPRequestHandler):
 
     def _forward(self, method: str) -> None:
         server = cast("_InferenceServer", self.server)
-        path = urlsplit(self.path).path
+        requested = urlsplit(self.path)
+        path = posixpath.normpath(requested.path)
         if not path.startswith(f"{API_PATH}/"):
             proxy.reply(self, HTTPStatus.NOT_FOUND, _error_body(f"only {API_PATH}/... is proxied"), _CONTENT_TYPE)
             return
+        query = f"?{requested.query}" if requested.query else ""
         body = self.rfile.read(proxy.content_length(self)) if method == "POST" else None
         try:
             upstream = requests.request(
                 method,
-                f"{server.upstream}{self.path.removeprefix(API_PATH)}",
+                f"{server.upstream}{path}{query}",
                 data=body,
                 headers=self._upstream_headers(server.api_key),
                 stream=True,
@@ -106,7 +121,8 @@ class InferenceProxy:
         if not api_key.strip():
             msg = "the inference API key is missing; it is read from the environment, never from a configuration file"
             raise InferenceProxyError(msg)
-        self._upstream = api_base.rstrip("/")
+        # Hermes appends its API path to the proxy URL, so the upstream base keeps everything before that version.
+        self._upstream = api_base.rstrip("/").removesuffix(API_PATH)
         self._api_key = api_key.strip()
         self._timeout = upstream_timeout
         self._running: tuple[_InferenceServer, threading.Thread] | None = None

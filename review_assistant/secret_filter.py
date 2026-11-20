@@ -7,7 +7,7 @@ import re
 from collections.abc import Iterable
 
 REDACTED = "[redacted]"
-_CREDENTIAL = re.compile(
+CREDENTIAL_PATTERN = re.compile(
     r"github_pat_\w{20,}|gh[pousr]_[A-Za-z0-9]{20,}"
     r"|sk-[A-Za-z0-9_-]{30,}"
     r"|ya29\.[\w-]{20,}|1//0[\w-]{20,}|GOCSPX-[\w-]{10,}"
@@ -19,7 +19,7 @@ def redact(text: str, known: Iterable[str]) -> str:
     """Return text with the known values and any GitHub or Google credential pattern replaced."""
     for value in filter(None, known):
         text = text.replace(value, REDACTED)
-    return _CREDENTIAL.sub(REDACTED, text)
+    return CREDENTIAL_PATTERN.sub(REDACTED, text)
 
 
 def _decoded(text: str) -> str:

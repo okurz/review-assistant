@@ -139,7 +139,8 @@ def _call(
     target = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
     try:
         payload = json.dumps(body).encode() if body is not None else None
-        connection.request(method, target, body=payload, headers={"Authorization": f"Bearer {SENTINEL_API_KEY}"})
+        headers = {"Authorization": f"Bearer {SENTINEL_API_KEY}", "TE": "trailers"}
+        connection.request(method, target, body=payload, headers=headers)
         response = connection.getresponse()
         return response.status, dict(response.getheaders()), response.read()
     finally:
@@ -193,6 +194,36 @@ def test_a_path_outside_v1_is_refused_without_contacting_the_upstream(serve: _Se
     assert (status, headers["Content-Type"]) == (404, "application/json")
     assert "only /v1/" in body.decode()
     assert upstream.requests == []
+
+
+def test_hop_by_hop_headers_are_not_forwarded(serve: _Serve) -> None:
+    upstream = serve([JSON_ANSWER])
+    with InferenceProxy(upstream.url, KEY) as proxy:
+        _call(f"{proxy.url}/chat/completions", body=CHAT)
+    assert _header(upstream.requests[0], "te") is None
+
+
+def test_a_dotted_path_cannot_escape_the_api_prefix(serve: _Serve) -> None:
+    upstream = serve([JSON_ANSWER])
+    with InferenceProxy(upstream.url, KEY) as proxy:
+        status, _headers, _body = _call(f"http://{urlparse(proxy.url).netloc}/v1/../v2/chat/completions", body=CHAT)
+    assert status == 404
+    assert upstream.requests == []
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        pytest.param("{upstream}", f"{API_PATH}/chat/completions", id="base-without-a-version"),
+        pytest.param("{root}", f"{API_PATH}/chat/completions", id="base-with-a-version"),
+    ],
+)
+def test_the_upstream_keeps_the_version_segment(serve: _Serve, api_base: str, expected: str) -> None:
+    upstream = serve([JSON_ANSWER])
+    base = api_base.format(upstream=upstream.url, root=upstream.url)
+    with InferenceProxy(base, KEY) as proxy:
+        _call(f"{proxy.url}/chat/completions", body=CHAT)
+    assert upstream.requests[0].path == expected
 
 
 def test_upstream_error_passes_through_unchanged(serve: _Serve) -> None:

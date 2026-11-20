@@ -287,7 +287,7 @@ def test_check_isolation_runs_script_as_the_agent_would_run(
     run = mocker.patch("review_assistant.cli.subprocess.run", side_effect=script)
     assert main(_check_argv(fakes)) == 3
     argv = run.call_args.args[0]
-    scratch = argv[-1]
+    scratch = argv[-2]
     assert argv == [
         "env",
         f"HERMES_WRITE_SAFE_ROOT={scratch}",
@@ -298,6 +298,7 @@ def test_check_isolation_runs_script_as_the_agent_would_run(
         str(fakes.clone),
         str(fakes.checkout.return_value),
         scratch,
+        "helmcode-proxy",
     ]
     assert not {
         "REVIEW_ASSISTANT_GH_TOKEN",
