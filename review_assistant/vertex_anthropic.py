@@ -11,13 +11,12 @@ streaming chunks, unchanged.
 import json
 import logging
 import os
-import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Self, cast, override
+from http.server import BaseHTTPRequestHandler
+from typing import TYPE_CHECKING, Self, cast, override
 from urllib.parse import urlsplit
 
 import google.auth
@@ -25,15 +24,18 @@ import google.auth.exceptions
 import google.auth.transport.requests
 import requests
 
+from review_assistant import proxy
+from review_assistant.proxy import LOOPBACK_HOST, LoopbackServer
+
+if TYPE_CHECKING:
+    import threading
+
 MESSAGES_PATH = "/v1/messages"
 VERTEX_ANTHROPIC_VERSION = "vertex-2023-10-16"
 DEFAULT_LOCATION = "global"
 CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-LOOPBACK_HOST = "127.0.0.1"
 _TOKEN_MARGIN = timedelta(minutes=5)
 _UPSTREAM_TIMEOUT = 600.0
-_READ_CHUNK = 8192
-_END_OF_CHUNKS = b"0\r\n\r\n"
 _STRIPPED_HEADERS = frozenset({
     "anthropic-version",
     "authorization",
@@ -141,7 +143,7 @@ def _forward_headers(headers: Iterable[tuple[str, str]]) -> dict[str, str]:
     }
 
 
-class _VertexServer(ThreadingHTTPServer):
+class _VertexServer(LoopbackServer):
     """Loopback-only HTTP server carrying the proxy configuration and the token cache."""
 
     config: VertexAnthropicConfig
@@ -183,7 +185,7 @@ class _VertexHandler(BaseHTTPRequestHandler):
 
     def _parse_body(self) -> tuple[str, dict[str, object]] | None:
         try:
-            payload = json.loads(self.rfile.read(self._content_length()))
+            payload = json.loads(self.rfile.read(proxy.content_length(self)))
         except json.JSONDecodeError:
             self._reply(HTTPStatus.BAD_REQUEST, "request body is not JSON")
             return None
@@ -193,39 +195,12 @@ class _VertexHandler(BaseHTTPRequestHandler):
         model = cast("str", payload.pop("model"))
         return model, cast("dict[str, object]", payload)
 
-    def _content_length(self) -> int:
-        try:
-            return int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            return 0
-
     def _relay(self, upstream: requests.Response) -> None:
-        content_type = upstream.headers.get("Content-Type", "application/json")
-        self.send_response(upstream.status_code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Transfer-Encoding", "chunked")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
-        for chunk in filter(None, upstream.iter_content(chunk_size=_READ_CHUNK)):
-            self._write_chunk(chunk)
-        self.wfile.write(_END_OF_CHUNKS)
-        self.wfile.flush()
-
-    def _write_chunk(self, chunk: bytes) -> None:
-        self.wfile.write(f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n")
-        self.wfile.flush()
+        proxy.relay(self, upstream)
 
     def _reply(self, status: HTTPStatus, message: str) -> None:
         body = json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": message}}).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
-        self.wfile.write(body)
-        self.wfile.flush()
+        proxy.reply(self, status, body, "application/json")
 
     @override
     def log_message(self, format: str, *args: object) -> None:
@@ -271,8 +246,7 @@ class VertexAnthropicProxy:
         server.config = self._config
         server.tokens = self._tokens
         server.upstream_timeout = self._timeout
-        thread = threading.Thread(target=server.serve_forever, name="vertex-anthropic-proxy", daemon=True)
-        thread.start()
+        thread = proxy.start(server, "vertex-anthropic-proxy")
         self._running = (server, thread)
         log.info("vertex anthropic proxy for project %s listening on %s", self._config.project, self.url)
         return self
@@ -282,7 +256,5 @@ class VertexAnthropicProxy:
         if self._running is None:
             return
         server, thread = self._running
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+        proxy.stop(server, thread)
         self._running = None
