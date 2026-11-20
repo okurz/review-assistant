@@ -35,6 +35,18 @@ No openQA clone setup is needed: each run clones the repository shallow into its
   agent cannot read them. The agent can read the ADC (accepted risk, D21); reviews carrying a token or credential
   pattern are refused before they are posted, and token values are redacted from log lines.
 
+## OpenPlatform access
+
+Deployment access details are intentionally kept out of this repository. Local operator notes hold the Rancher URL, cluster and project identifiers, and the kubeconfig path.
+
+In the Rancher UI, use Cluster Explorer, then Workloads and Pods to reach the Deployment and its live container log. With `kubectl`:
+
+```bash
+kubectl --kubeconfig <kubeconfig> -n <namespace> logs -f deploy/review-assistant
+```
+
+The daemon logs warnings for reviews that are not recorded; successful dry-run reviews are printed to stdout.
+
 ## Rollback
 
 1. `systemctl --user disable --now review-assistant.timer`

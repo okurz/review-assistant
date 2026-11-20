@@ -47,33 +47,40 @@ Or create the Secret in the Rancher UI under Storage > Secrets in namespace `rev
 ## Deploy
 
 1. Validate the manifests: `make check-k8s`.
-2. Apply the workload with the OpenPlatform overlay: `kubectl apply --kustomize deploy/kubernetes/overlays/openplatform`.
+2. Create the namespace as a project owner: apply `deploy/kubernetes/base/namespace.yaml` or create it in the Rancher UI. The namespace must already belong to the target Rancher project; the overlay does not create or move it.
+3. Run the one-off dry run first (stage 1 below).
+4. Apply the workload with the OpenPlatform overlay: `kubectl apply --kustomize deploy/kubernetes/overlays/openplatform`.
 
-This creates the namespace, ServiceAccount, ConfigMap, PersistentVolumeClaim `review-assistant-state`, NetworkPolicy and the Deployment `review-assistant`. The Deployment starts the daemon in dry-run mode (no `--post`), so it prints reviews and does not post them.
+The overlay pins `ghcr.io/os-autoinst/review-assistant:latest` and sets `pilot_cap: 3`. It creates the ServiceAccount, ConfigMap, PersistentVolumeClaim `review-assistant-state`, NetworkPolicy and the Deployment `review-assistant` in the existing namespace. The Deployment starts the daemon in dry-run mode (no `--post`), so it prints reviews and does not post them.
+
+Local prototype targets are intentionally kept outside this repository; use an operator-specific overlay and image tag for those.
 
 ## One-off dry run (stage 1)
 
-Use this before the Deployment to check connectivity, secrets and one review end to end. It runs a single `review-assistant run` and exits:
+Use this before the Deployment to check connectivity, secrets and one review end to end. The dry-run overlay includes the same ServiceAccount, ConfigMap, PVC and NetworkPolicy, adds the Job, and pins the Deployment to `replicas: 0` so the daemon does not start:
 
 ```
-kubectl --namespace review-assistant delete job review-assistant-dry-run --ignore-not-found
-kubectl apply --filename deploy/kubernetes/base/job-dry-run.yaml
+kubectl apply --kustomize deploy/kubernetes/overlays/openplatform-dry-run
 kubectl --namespace review-assistant wait --for=condition=complete job/review-assistant-dry-run --timeout=35m
 kubectl --namespace review-assistant logs job/review-assistant-dry-run
 ```
 
 Expected: exit code 0 and a generated review in the log, with no GitHub post. Check the pod status for `Error` or `CrashLoopBackOff` if the wait fails.
 
+To rerun the Job, delete it first and reapply the dry-run overlay. Reapplying the dry-run overlay after stage 2 scales the Deployment back to 0.
+
 ## Continuous dry run (stage 2)
 
-After step 2 of Deploy, confirm the Deployment is up:
+After stage 1 passes, apply the normal overlay and confirm the Deployment is up:
 
 ```
+kubectl apply --kustomize deploy/kubernetes/overlays/openplatform
+kubectl --namespace review-assistant rollout status deployment/review-assistant --timeout=5m
 kubectl --namespace review-assistant get deployment review-assistant
 kubectl --namespace review-assistant get pods --selector app.kubernetes.io/name=review-assistant
 ```
 
-Expected: one pod, `1/1` ready. The first log lines are the startup sweep, which reviews up to `pilot_cap` pull requests per cycle and continues with the rest on later cycles; afterwards each idle poll logs nothing new, because an unchanged listing answers `304 Not Modified` and costs no rate limit. Let it run for 24 hours and check that the pod has not restarted (`RESTARTS` stays at 0).
+Expected: one pod, `1/1` ready. The first log lines are the startup sweep, which reviews up to `pilot_cap` (3) pull requests per cycle and continues with the rest on later cycles; afterwards each idle poll logs nothing new, because an unchanged listing answers `304 Not Modified` and costs no rate limit. Let it run for 24 hours and check that the pod has not restarted (`RESTARTS` stays at 0).
 
 ## Logs
 
@@ -85,9 +92,9 @@ Rancher UI: the Deployment's Pods list shows status and restarts; each pod has a
 
 ## Heartbeat and liveness
 
-The daemon touches `/tmp/heartbeat` on every poll cycle and before every review. The liveness probe runs `test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 300` every 60 seconds after an initial 60 seconds, and restarts the pod after three consecutive failures.
+The daemon touches `/tmp/heartbeat` on every poll cycle and before every review. The liveness probe runs `test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 900` every 60 seconds after an initial 60 seconds, and restarts the pod after three consecutive failures.
 
-To verify the probe by hand, print the heartbeat age; it should be under 300 seconds:
+To verify the probe by hand, print the heartbeat age; it should be under 900 seconds:
 
 ```
 kubectl --namespace review-assistant exec deployment/review-assistant -- sh -c 'echo $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) ))'
