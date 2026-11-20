@@ -63,7 +63,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 300
+                - test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 900
             initialDelaySeconds: 30
             periodSeconds: 30
           livenessProbe:
@@ -71,7 +71,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 300
+                - test $(($(date +%s) - $(stat -c %Y /tmp/heartbeat))) -lt 900
             initialDelaySeconds: 60
             periodSeconds: 60
           securityContext:
