@@ -14,7 +14,7 @@ STANDALONE=(
     deploy/kubernetes/job-dry-run/job.yaml
     deploy/kubernetes/secret-template.yaml
 )
-SECRET_PATTERNS='ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY|"private_key_id"|"refresh_token"|ya29\.|"type": "service_account"'
+SECRET_PATTERNS='sk-[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY|"private_key_id"|"refresh_token"|ya29\.|"type": "service_account"'
 
 for tool in "$KUSTOMIZE" "$KUBECONFORM"; do
     command -v "$tool" >/dev/null || {

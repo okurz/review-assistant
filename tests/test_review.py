@@ -167,9 +167,9 @@ def test_hermes_gets_only_provider_model_scratch_and_toolsets(tmp_path: Path) ->
     assert argv[0:4] == ["env", f"HERMES_WRITE_SAFE_ROOT={tmp_path / f'pr-{NUMBER}'}", "hermes", "-z"]
     assert argv[5:] == [
         "--provider",
-        "google-vertex",
+        "custom",
         "-m",
-        "google/gemini-3.8-flash",
+        "deepseek-v4-flash",
         "--in",
         str(tmp_path / f"pr-{NUMBER}"),
         "-t",

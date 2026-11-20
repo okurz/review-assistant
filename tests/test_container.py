@@ -134,10 +134,35 @@ def test_secrets_are_outside_the_repository(field: str) -> None:
 
 def test_image_bakes_the_skill_at_the_pin_of_the_example_config() -> None:
     containerfile = (REPO / "Containerfile").read_text(encoding="utf-8")
-    pin = load_config(REPO / "config" / "reviewer.example.yaml").skill.sha
-    assert f"ARG SKILL_SHA={pin}\n" in containerfile
+    example = load_config(REPO / "config" / "reviewer.example.yaml")
+    assert f"ARG SKILL_SHA={example.skill.sha}\n" in containerfile
     configmap = yaml.safe_load((REPO / "deploy/kubernetes/base/configmap.yaml").read_text(encoding="utf-8"))
-    assert yaml.safe_load(configmap["data"]["reviewer.yaml"])["skill"]["sha"] == pin
+    deployed = yaml.safe_load(configmap["data"]["reviewer.yaml"])
+    assert deployed["skill"]["sha"] == example.skill.sha
+    assert (deployed["provider"], deployed["model"], deployed["api_base"], deployed["pilot_cap"]) == (
+        example.provider,
+        example.model,
+        example.api_base,
+        3,
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "key"),
+    [
+        pytest.param("deploy/kubernetes/base/deployment.yaml", "helmcode-api-key", id="deployment"),
+        pytest.param("deploy/kubernetes/job-dry-run/job.yaml", "helmcode-api-key", id="dry-run-job"),
+    ],
+)
+def test_inference_key_is_referenced_from_the_secret_only(path: str, key: str) -> None:
+    manifest = yaml.safe_load((REPO / path).read_text(encoding="utf-8"))
+    containers = manifest["spec"]["template"]["spec"]["containers"]
+    env = {entry["name"]: entry for entry in containers[0]["env"]}
+    assert env["REVIEW_ASSISTANT_INFERENCE_KEY"]["valueFrom"]["secretKeyRef"] == {
+        "name": "review-assistant-secrets",
+        "key": key,
+    }
+    assert "value" not in env["REVIEW_ASSISTANT_INFERENCE_KEY"]
 
 
 @pytest.fixture

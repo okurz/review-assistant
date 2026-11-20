@@ -116,9 +116,10 @@ def test_api_base_must_be_a_plain_https_url(api_base: str) -> None:
 
 def test_example_config_loads_with_pilot_settings() -> None:
     config = load_config(EXAMPLE)
-    assert (config.provider, config.model, config.toolsets, config.pilot_cap) == (
-        "google-vertex",
-        "google/gemini-3.8-flash",
+    assert (config.provider, config.model, config.api_base, config.toolsets, config.pilot_cap) == (
+        "custom",
+        "deepseek-v4-flash",
+        "https://api.helmcode.com/v1",
         "file",
         10,
     )

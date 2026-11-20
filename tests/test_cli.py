@@ -31,13 +31,12 @@ EXAMPLE = Path(__file__).parent.parent / "config" / "reviewer.example.yaml"
 READ_TOKEN = "read-token-placeholder"
 WRITE_TOKEN = "write-token-placeholder"
 INFERENCE_KEY = "sk-" + "inference-key-placeholder" * 2
-CUSTOM_CONFIG = """agent_name: os-autoinst-review
+VERTEX_CONFIG = """agent_name: os-autoinst-review
 skill:
   repo: https://github.com/os-autoinst/openQA-skill.git
   sha: a6d255abcbce67a380f6716c94e861869ed64882
-provider: custom
-model: deepseek-v4-flash
-api_base: https://api.helmcode.example/v1
+provider: google-vertex
+model: google/gemini-3.8-flash
 toolsets: file
 pilot_cap: 10
 """
@@ -56,7 +55,7 @@ PULLS = [
 
 @pytest.fixture
 def fakes(mocker: MockerFixture, tmp_path: Path) -> SimpleNamespace:
-    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN})
+    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN, INFERENCE_KEY_ENV: INFERENCE_KEY})
     ns = SimpleNamespace(
         state_file=tmp_path / "state.json",
         skill_cache=tmp_path / "skills",
@@ -189,6 +188,7 @@ def test_dry_run_removes_both_tokens_so_agent_cannot_inherit_them(
     assert main(_argv(fakes)) == EXIT_OK
     assert "REVIEW_ASSISTANT_GH_TOKEN" not in os.environ
     assert "REVIEW_ASSISTANT_GH_READ_TOKEN" not in os.environ
+    assert INFERENCE_KEY_ENV not in os.environ
     assert fakes.listing.call_args.args[0] == READ_TOKEN
     fakes.post_review.assert_not_called()
 
@@ -250,8 +250,8 @@ def test_failed_pull_is_logged_and_not_recorded_while_run_continues(
 @pytest.mark.parametrize(
     ("post", "secrets"),
     [
-        pytest.param(True, (READ_TOKEN, WRITE_TOKEN, ""), id="post-guards-both-tokens"),
-        pytest.param(False, (READ_TOKEN, "", ""), id="dry-run-guards-read-token"),
+        pytest.param(True, (READ_TOKEN, WRITE_TOKEN, INFERENCE_KEY), id="post-guards-both-tokens"),
+        pytest.param(False, (READ_TOKEN, "", INFERENCE_KEY), id="dry-run-guards-read-token"),
     ],
 )
 def test_review_is_told_which_tokens_must_never_appear(
@@ -378,21 +378,14 @@ def test_daemon_sweeps_then_stops_between_reviews_on_sigterm(
 
 
 @pytest.fixture
-def custom_config(tmp_path: Path) -> Path:
-    path = tmp_path / "custom.yaml"
-    path.write_text(CUSTOM_CONFIG, encoding="utf-8")
+def vertex_config(tmp_path: Path) -> Path:
+    path = tmp_path / "vertex.yaml"
+    path.write_text(VERTEX_CONFIG, encoding="utf-8")
     return path
 
 
-def _proxy_env(mocker: MockerFixture) -> None:
-    mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN, INFERENCE_KEY_ENV: INFERENCE_KEY})
-
-
-def test_custom_route_hands_the_proxy_url_and_the_sentinel(
-    fakes: SimpleNamespace, mocker: MockerFixture, custom_config: Path
-) -> None:
-    _proxy_env(mocker)
-    assert main(_argv(fakes, config=custom_config)) == EXIT_OK
+def test_custom_route_hands_the_proxy_url_and_the_sentinel(fakes: SimpleNamespace) -> None:
+    assert main(_argv(fakes)) == EXIT_OK
     proxy_url = fakes.review.call_args.kwargs["proxy_url"]
     assert proxy_url is not None
     assert proxy_url.startswith("http://127.0.0.1:")
@@ -401,25 +394,24 @@ def test_custom_route_hands_the_proxy_url_and_the_sentinel(
     assert INFERENCE_KEY_ENV not in os.environ
 
 
-def test_vertex_route_runs_without_a_proxy(fakes: SimpleNamespace) -> None:
-    assert main(_argv(fakes)) == EXIT_OK
+def test_vertex_route_runs_without_a_proxy(fakes: SimpleNamespace, vertex_config: Path) -> None:
+    assert main(_argv(fakes, config=vertex_config)) == EXIT_OK
     assert fakes.review.call_args.kwargs["proxy_url"] is None
-    assert fakes.review.call_args.args[2].secrets == (READ_TOKEN, "", "")
+    assert fakes.review.call_args.args[2].secrets == (READ_TOKEN, "", INFERENCE_KEY)
 
 
 def test_missing_inference_key_is_reported_before_listing(
-    fakes: SimpleNamespace, mocker: MockerFixture, custom_config: Path, capsys: pytest.CaptureFixture[str]
+    fakes: SimpleNamespace, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
 ) -> None:
     mocker.patch.dict(os.environ, {"REVIEW_ASSISTANT_GH_READ_TOKEN": READ_TOKEN}, clear=True)
-    assert main(_argv(fakes, config=custom_config)) == EXIT_USAGE
+    assert main(_argv(fakes)) == EXIT_USAGE
     assert "inference API key is missing" in capsys.readouterr().err
     fakes.listing.assert_not_called()
 
 
 def test_daemon_uses_the_proxy_and_releases_its_port(
-    fakes: SimpleNamespace, mocker: MockerFixture, tmp_path: Path, custom_config: Path
+    fakes: SimpleNamespace, mocker: MockerFixture, tmp_path: Path
 ) -> None:
-    _proxy_env(mocker)
     signal_mock = mocker.patch("review_assistant.cli.signal.signal")
     polls: list[str | None] = []
 
@@ -431,7 +423,7 @@ def test_daemon_uses_the_proxy_and_releases_its_port(
         return PollResult(pulls=None, etag="v1", remaining=5000, reset=None)
 
     mocker.patch("review_assistant.cli.poll_open_pulls", side_effect=poll)
-    assert main(_daemon_argv(fakes, tmp_path / "heartbeat", config=custom_config)) == EXIT_OK
+    assert main(_daemon_argv(fakes, tmp_path / "heartbeat")) == EXIT_OK
     proxy_url = fakes.review.call_args.kwargs["proxy_url"]
     assert proxy_url is not None
     parsed = urlparse(proxy_url)
