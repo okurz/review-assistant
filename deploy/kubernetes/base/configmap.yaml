@@ -11,7 +11,7 @@ data:
     provider: google-vertex
     model: google/gemini-3.8-flash
     toolsets: file
-    pilot_cap: 10
+    pilot_cap: 3
   hermes-config.yaml: |
     vertex:
       project_id: REPLACE_WITH_GCP_PROJECT_ID
